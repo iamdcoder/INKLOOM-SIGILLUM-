@@ -8,7 +8,9 @@ import { API_BASE,api,Finding,ReviewPayload,VersionHistoryItem,getToken,getSessi
 const EMPTY_FINDINGS: Finding[] = [];
 
 export default function ReviewPage(){const params=useParams<{id:string}>();const router=useRouter();const sessionSnapshot=useSyncExternalStore(subscribeToSession,getSessionUserRaw,()=>null);const sessionUser=useMemo(()=>parseSessionUser(sessionSnapshot),[sessionSnapshot]);const role=sessionUser?.role||"";const [data,setData]=useState<ReviewPayload|null>(null);const [history,setHistory]=useState<VersionHistoryItem[]>([]);const [error,setError]=useState("");const [busy,setBusy]=useState(false);const [reason,setReason]=useState("");const [decisionMessage,setDecisionMessage]=useState("");const [expanded,setExpanded]=useState<string|null>(null);const [replacement,setReplacement]=useState<Record<string,string>>({});const [revisionFile,setRevisionFile]=useState<File|null>(null);const [revisionSummary,setRevisionSummary]=useState("");const [revisionBusy,setRevisionBusy]=useState(false);const [previewResource,setPreviewResource]=useState<{versionId:string;url:string}|null>(null);const [previewFailure,setPreviewFailure]=useState<{versionId:string;message:string}|null>(null);
- const load=useCallback(async()=>{setError("");try{const result=await api<ReviewPayload>(`/reviews/${params.id}`);setData(result);try{const timeline=await api<{versions:VersionHistoryItem[]}>(`/submissions/${result.submission.id}/history`);setHistory(timeline.versions);}catch{setHistory([]);}}catch(e){setError(e instanceof Error?e.message:"Unable to load review");}},[params.id]);useEffect(()=>{void load();},[load]);
+ const fetchReview=useCallback(async()=>{const result=await api<ReviewPayload>(`/reviews/${params.id}`);let versions:VersionHistoryItem[]=[];try{const timeline=await api<{versions:VersionHistoryItem[]}>(`/submissions/${result.submission.id}/history`);versions=timeline.versions;}catch{versions=[];}return {result,versions};},[params.id]);
+ const load=useCallback(async()=>{setError("");try{const {result,versions}=await fetchReview();setData(result);setHistory(versions);}catch(e){setError(e instanceof Error?e.message:"Unable to load review");}},[fetchReview]);
+ useEffect(()=>{let cancelled=false;fetchReview().then(({result,versions})=>{if(cancelled)return;setData(result);setHistory(versions);}).catch(e=>{if(cancelled)return;setError(e instanceof Error?e.message:"Unable to load review");});return()=>{cancelled=true;};},[fetchReview]);
  useEffect(()=>{
   const versionId=data?.content_version?.id;
   if(!versionId)return;
@@ -42,8 +44,8 @@ export default function ReviewPage(){const params=useParams<{id:string}>();const
   };
  },[data?.content_version?.id]);
  const activeVersionId=data?.content_version?.id;
- const previewUrl=previewResource?.versionId===activeVersionId?previewResource.url:"";
- const previewError=previewFailure?.versionId===activeVersionId?previewFailure.message:"";
+ const previewUrl=previewResource && previewResource.versionId===activeVersionId?previewResource.url:"";
+ const previewError=previewFailure && previewFailure.versionId===activeVersionId?previewFailure.message:"";
  const findings=data?.findings??EMPTY_FINDINGS;const blockers=findings.filter(f=>["blocking","review_required"].includes(f.severity)&&!(["SUPPORTED","INFORMATIONAL"].includes(f.verdict))&&f.status!=="RESOLVED");const canDecide=["reviewer","brand_owner","administrator"].includes(role);
  const totals=useMemo(()=>({blocking:findings.filter(f=>f.severity==="blocking"&&f.status!=="RESOLVED").length,review:findings.filter(f=>f.severity==="review_required"&&f.status!=="RESOLVED").length,clear:findings.filter(f=>["SUPPORTED","INFORMATIONAL"].includes(f.verdict)).length}),[findings]);
  async function makeDecision(action:string){if((action==="REQUEST_CHANGES"||action==="REJECT"||action==="OVERRIDE")&&reason.trim().length<4){setError("Add a reason before recording this decision.");return;}setBusy(true);setError("");try{const result=await api<{submission_status:string}>(`/reviews/${data!.review.id}/decisions`,{method:"POST",body:JSON.stringify({action,reason:reason||null})});setDecisionMessage(`Decision recorded: ${result.submission_status.replaceAll("_"," ")}`);await load();}catch(e){setError(e instanceof Error?e.message:"Decision failed");}finally{setBusy(false)}}

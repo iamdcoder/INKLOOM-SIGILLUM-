@@ -1,9 +1,9 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { Activity, Archive, ArrowUpRight, BadgeCheck, BookOpen, Command, FilePlus2, Files, LayoutDashboard, LogOut, ScanEye, ShieldCheck, Workflow } from "lucide-react";
-import { clearSession, getUser, SessionUser } from "@/lib/api";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { ArrowUpRight, BookOpen, Command, FilePlus2, Files, LayoutDashboard, LogOut, ScanEye, ShieldCheck } from "lucide-react";
+import { clearSession, getSessionUserRaw, parseSessionUser, subscribeToSession } from "@/lib/api";
 
 const navigation = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
@@ -16,10 +16,17 @@ const navigation = [
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const userSnapshot = useSyncExternalStore(
+    subscribeToSession,
+    getSessionUserRaw,
+    () => null,
+  );
+  const user = useMemo(() => parseSessionUser(userSnapshot), [userSnapshot]);
+
   useEffect(() => {
-    setUser(getUser());
-    if (pathname !== "/login" && !sessionStorage.getItem("sigillum_token")) router.replace("/login");
+    if (pathname !== "/login" && !sessionStorage.getItem("sigillum_token")) {
+      router.replace("/login");
+    }
   }, [pathname, router]);
   const logout = () => { clearSession(); router.replace("/login"); };
   if (pathname === "/login") return <>{children}</>;

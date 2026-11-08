@@ -41,18 +41,56 @@ export function getToken() {
   if (typeof window === "undefined") return null;
   return sessionStorage.getItem("sigillum_token");
 }
-export function getUser(): SessionUser | null {
-  if (typeof window === "undefined") return null;
-  const raw = sessionStorage.getItem("sigillum_user");
-  try { return raw ? JSON.parse(raw) as SessionUser : null; } catch { return null; }
+const SESSION_CHANGE_EVENT = "sigillum-session-change";
+
+/** Subscribe React components to same-tab and cross-tab session changes. */
+export function subscribeToSession(callback: () => void) {
+  if (typeof window === "undefined") return () => undefined;
+
+  window.addEventListener("storage", callback);
+  window.addEventListener(SESSION_CHANGE_EVENT, callback);
+
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(SESSION_CHANGE_EVENT, callback);
+  };
 }
+
+/** A stable primitive snapshot suitable for useSyncExternalStore. */
+export function getSessionUserRaw(): string | null {
+  if (typeof window === "undefined") return null;
+  return sessionStorage.getItem("sigillum_user");
+}
+
+export function parseSessionUser(raw: string | null): SessionUser | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as SessionUser;
+  } catch {
+    return null;
+  }
+}
+
+function notifySessionChanged() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(SESSION_CHANGE_EVENT));
+  }
+}
+
+export function getUser(): SessionUser | null {
+  return parseSessionUser(getSessionUserRaw());
+}
+
 export function saveSession(token: string, user: SessionUser) {
   sessionStorage.setItem("sigillum_token", token);
   sessionStorage.setItem("sigillum_user", JSON.stringify(user));
+  notifySessionChanged();
 }
+
 export function clearSession() {
   sessionStorage.removeItem("sigillum_token");
   sessionStorage.removeItem("sigillum_user");
+  notifySessionChanged();
 }
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();

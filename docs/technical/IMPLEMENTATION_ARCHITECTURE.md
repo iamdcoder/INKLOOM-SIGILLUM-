@@ -6,8 +6,8 @@
 - **API:** FastAPI `/api/v1`, Pydantic request contracts, request IDs, CORS and structured HTTP errors.
 - **Application:** review use case coordinates extraction, deterministic analysis, immutable versions and audit records.
 - **Domain/verification:** typed enums and pure deterministic functions; no provider/model SDK has authority to decide truth.
-- **Persistence:** SQLAlchemy 2.x models with Alembic initial migration. Local default is SQLite for a reproducible two-day demo.
-- **Binary storage:** local private filesystem under `STORAGE_ROOT`, with opaque version keys and SHA-256 metadata.
+- **Persistence:** SQLAlchemy 2.x with a forward-only Alembic migration chain. SQLite is the local default with foreign keys enabled; PostgreSQL URLs use psycopg 3, bounded pooling and pre-ping. Readiness reports the active/expected migration revision. A follow-up migration installs pgvector on PostgreSQL.
+- **Binary storage:** `ObjectStorage` port with atomic/private local filesystem implementation and optional boto3 S3-compatible implementation (`STORAGE_BACKEND=s3`); opaque version keys and SHA-256 metadata. The authenticated download route verifies the bytes against the persisted hash before serving.
 - **OCR:** local Tesseract via pytesseract for PNG/JPG.
 - **Worker:** currently an entrypoint scaffold only. Reviews execute synchronously in the API process in this build.
 
@@ -29,6 +29,6 @@
 - The frontend displays server-owned verdicts; it does not adjudicate claims.
 - The current engine covers only configured deterministic claim patterns. It is not general-purpose claim understanding.
 - No external LLM, embedding service, hosted OCR provider or external data source is called by the current runtime.
-- `infra/docker-compose.yml` is a Postgres/pgvector and MinIO development scaffold; the current API uses SQLite and local filesystem storage unless settings are deliberately changed and adapters verified.
+- `infra/docker-compose.yml` is a Postgres/pgvector and MinIO development scaffold. The CI workflow now provisions PostgreSQL 17 + pgvector and runs migrations/tests against it; the hosted job has not yet been observed passing from this authoring session. The API can select the S3-compatible storage adapter by configuration; only offline adapter tests have been run here, so a live MinIO/AWS smoke test remains required. The default remains SQLite and local filesystem storage.
 - The LangGraph/durable job/checkpoint/event-streaming path is not active in this build.
 - Single demo workspace only. Creator ownership is checked in application routes, but PostgreSQL RLS and production-grade tenant isolation are not implemented.

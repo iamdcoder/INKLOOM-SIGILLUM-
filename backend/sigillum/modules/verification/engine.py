@@ -382,6 +382,10 @@ class VerificationEngine:
     ) -> None:
         terminology = self.pack.terminology
         for term in terminology.get("prohibited_or_review_terms", []):
+            # Historical fixture entries omit status and remain approved; any
+            # explicit draft/rejected decision must remove the rule from checks.
+            if term.get("status", "approved") != "approved":
+                continue
             variant = term.get("variant", "")
             if not variant:
                 continue
@@ -390,6 +394,7 @@ class VerificationEngine:
                     item.get("preferred")
                     for item in terminology.get("preferred_terms", [])
                     if item.get("term_id") == term.get("preferred_term_id")
+                    and item.get("status", "approved") == "approved"
                 ),
                 "",
             )

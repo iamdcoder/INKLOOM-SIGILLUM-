@@ -8,15 +8,19 @@ Sigillum is a pre-publication review workspace for checking text and static crea
 
 ## Current implementation status
 
-The current MVP has a locally runnable API and an implemented Next.js UI source tree. Build 008 has **50 passing backend unit/integration tests** in the packaged source. It adds valid-time and record/system-time assessment plus deterministic lexical + structured Reciprocal Rank Fusion (RRF) evidence candidate retrieval. The synthetic golden evaluation reports **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED and 0 FAIL**. These are test outcomes for the included cases only, not a general accuracy estimate or external certification.
+The MVP has a locally runnable API and Next.js application source. Build 009 added private local/S3-compatible object storage and SHA-256-verified originals. Build 010 made Alembic the development schema lifecycle and added PostgreSQL 17 + pgvector CI. Build 011 added persisted tenant/brand memberships, revocable server sessions, multi-workspace selection/switching, role-gated membership management, short-lived session-bound file grants and PostgreSQL RLS policies. Build 012 partitions Knowledge Pack versions/drafts by tenant and brand; adds source registry and record-level owner decisions; uploads private PNG/JPEG/WebP brand assets; verifies approved asset bytes by SHA-256; and ensures explicitly rejected terminology is no longer treated as a live brand rule. The current backend suite has **96 passed, 1 skipped** in SQLite mode; the skipped test is the PostgreSQL-only RLS enforcement test. The synthetic golden evaluation remains **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED and 0 FAIL**. These are deterministic regression results, not a general accuracy estimate or external certification. Hosted PostgreSQL RLS and complete frontend lint/typecheck/build remain pending.
 
 ### Implemented in this MVP
 
-- Demo authentication for creator, reviewer, brand owner and administrator roles.
-- Creator-owned submission access checks; reviewer/owner/admin review access within one synthetic demo workspace.
+- Password-based demo authentication with PBKDF2 password hashing and server-side revocable JWT sessions. JWT role/tenant claims are informational; each API request re-reads the active membership and derives authority from the database.
+- Persisted tenants, brands, per-brand memberships and user sessions. A user with multiple active memberships must explicitly select a workspace/brand at login and can switch context from the sidebar; switching revokes the previous session.
+- Creator and agency contributors are restricted to their own submissions. Reviewers, brand owners and administrators receive only the access allowed by their selected brand membership. Brand owners can add creator/agency/reviewer memberships; administrators can manage roles and activation. The last active administrator is protected from demotion/deactivation.
+- Five-minute (configurable 1–15 minute) signed original-file grants are bound to the user, session, membership, tenant, brand and content version. Revoked sessions or inactive memberships invalidate outstanding grants.
 - PDF, DOCX, TXT, PNG and JPG/JPEG intake with byte limits, signature/type checks and defensive parsing limits.
 - Text extraction from TXT, searchable PDF, DOCX paragraphs/tables; local Tesseract OCR for PNG/JPG with word boxes and extraction confidence.
 - Immutable source versions with SHA-256 content hashes and retained original files.
+- A storage port with atomic/private local filesystem storage and an opt-in boto3 S3-compatible adapter (MinIO/AWS-style API); authenticated downloads are read through the API and re-hash the stored bytes before returning them.
+- Readiness reports the actual storage driver and fails closed when the configured storage service is unavailable; local mode also probes filesystem write access. Storage outages are distinct from parser failures and never produce an approval state.
 - Deterministic savings-claim checks against configured approved facts, required scope fields, source precedence, publication valid time and review record time.
 - Approved-only, scoped lexical + structured RRF evidence candidate retrieval with explainable ranks and temporal eligibility; vector/pgvector retrieval is explicitly not configured.
 - Conservative configured terminology, tone-pattern and untrusted-instruction-text checks.
@@ -24,13 +28,13 @@ The current MVP has a locally runnable API and an implemented Next.js UI source 
 - Hash-bound TXT correction proposals that create a new content version and trigger a new review; revised PDFs, DOCX and images can be re-uploaded as new immutable versions.
 - Human reviewer decisions, mandatory reasons for reject/request-changes/override, role-gated override, approval blocking for unresolved blocking/review-required findings, and audit events.
 - Explicit visual review findings for logo identity and contrast on images, and for embedded visual content in PDF/DOCX.
-- Next.js screens for login, overview, submissions/upload, review workbench, owner-governed Brand Control Center, Knowledge Pack version history and audit history.
-- Tenant-scoped filesystem-backed Knowledge Pack draft/edit/validate/publish lifecycle. Brand Owner is the only role allowed to mutate or publish brand truth; reviewers and administrators are read-only. Published versions are immutable, stale drafts are rejected, and each review preserves the exact pack snapshot/fingerprint used.
+- Next.js screens for login, overview, submissions/upload, review workbench, owner-governed Brand Control Center, Knowledge Pack version history, audit history and a role-gated Workspace Access screen. The sidebar includes a working workspace/brand context selector for users with multiple memberships.
+- Tenant+brand-scoped filesystem-backed Knowledge Pack draft/edit/validate/publish lifecycle. A new non-demo brand starts with an empty pack rather than inheriting ORBITA facts/assets. Brand Owners can register sources, approve/reject facts, policies, terms and assets, upload private PNG/JPEG/WebP assets, and publish a new immutable pack version. Each review preserves the exact pack snapshot/fingerprint used.
 
 ### Not implemented or not yet verified
 
-- The current runtime is a **single synthetic demo workspace**. PostgreSQL row-level security, production multi-tenant isolation, enterprise identity, invitations and SSO are not implemented.
-- SQLite and private local filesystem storage are the default active adapters. `infra/docker-compose.yml` is a PostgreSQL/pgvector + MinIO scaffold; the current API does not yet use those services.
+- The default seeded runtime remains one synthetic ORBITA workspace/brand, while Build 011/012 support persisted multi-membership contexts and tenant+brand Knowledge Pack path isolation. Build 011 installs PostgreSQL RLS policies with `ENABLE` and `FORCE` on tenants, brands, memberships, sessions, submissions, content versions, reviews, findings, patches, decisions and audit events. However, live PostgreSQL execution is unavailable in this authoring environment; the non-superuser PostgreSQL CI run must pass before production multi-tenant isolation is considered verified. Enterprise identity/SSO, account invitation and account creation flows are not implemented. Workspace Access currently links existing accounts.
+- SQLite and private local filesystem storage remain the default local configuration. Development startup applies Alembic migrations; readiness verifies the schema head. PostgreSQL URLs use the pinned psycopg 3 driver and bounded connection pooling. The PostgreSQL service job uses a non-superuser `NOBYPASSRLS` application role and `scripts/verify_database.py` now checks that every protected table has RLS enabled, forced and covered by a policy. Its hosted result must still be observed passing after push; no live PostgreSQL service was available locally.
 - Reviews execute synchronously in the API process. The worker directory is a scaffold; durable leases, retry budgets, LangGraph checkpointing, resumable jobs and SSE progress are not active.
 - Retrieval uses a local deterministic lexical + structured RRF baseline for supported facts. Vector/pgvector search, HNSW indexing, retrieval Recall@5/MRR benchmarks and database-backed permission-aware search are not implemented.
 - Claim extraction is deliberately narrow (configured numeric savings patterns and selected quantified statements). It is not a general semantic claim verifier or legal compliance engine.
@@ -39,9 +43,9 @@ The current MVP has a locally runnable API and an implemented Next.js UI source 
 - Tone checks are configured phrase/pattern checks, not a calibrated model of brand voice.
 - Text patching is supported for TXT. Other formats require editing in their native application and uploading a new version.
 - A full standalone Correction Studio, Reviewer Console, Governance/Impact Radar and Administration configuration UI are not complete.
-- Knowledge Pack editing currently uses a structured JSON editor rather than guided record forms. Binary approved-asset upload/scanning and automatic impact re-review after a pack publication are not implemented.
-- The Knowledge Pack version store is tenant-scoped and filesystem-backed under `data/brand_packs/` for the single-host event build. Multi-process-safe distributed publishing and a PostgreSQL/object-store pack adapter are not yet implemented.
-- The participant's Windows environment has now passed `npm run lint`, `npm run typecheck` and `npm run build` (2026-11-08). The generated `apps/web/package-lock.json` should be committed and retained with the submission.
+- Knowledge Pack editing currently uses a structured JSON editor rather than guided record forms. Binary PNG/JPEG/WebP asset upload, private preview and SHA-256 verification are implemented in Build 012; malware scanning, advanced asset-use rules and automatic impact re-review after a pack publication are not implemented.
+- The Knowledge Pack version store is tenant+brand-scoped and filesystem-backed under `data/brand_packs/` for the single-host event build. It is not multi-instance safe: cross-process/distributed publication locking and a PostgreSQL/object-store pack metadata adapter are not yet implemented.
+- The participant verified `npm run lint`, `npm run typecheck` and `npm run build` on the pre-Build-011 frontend on Windows (2026-11-08). Build 011/012 change login/workspace context and Brand Control Center UI. In this authoring environment, 15 TypeScript/TSX files transpiled with zero syntax diagnostics, but `npm ci` timed out; rerun full lint/typecheck/build against Build 012 locally. Retain `apps/web/package-lock.json`.
 - No hosted LLM, embedding, OCR or external data provider is called by this build.
 
 ## Stack
@@ -50,8 +54,8 @@ The current MVP has a locally runnable API and an implemented Next.js UI source 
 |---|---|---|
 | Web | Next.js App Router, React, TypeScript, Lucide, custom CSS tokens | Participant-verified local build; not a production deployment or comprehensive browser E2E suite |
 | API | FastAPI, Pydantic | Independent microservices |
-| Persistence | SQLAlchemy 2.x, local SQLite, Alembic initial migration | Active PostgreSQL/pgvector runtime |
-| File storage | Private local filesystem, SHA-256 metadata | Active S3/MinIO integration |
+| Persistence | SQLAlchemy 2.x, SQLite local default, PostgreSQL + psycopg 3 engine path, Alembic migration chain | Live PostgreSQL service run is pending CI; pgvector extension migration is in place |
+| File storage | Private local filesystem by default; opt-in S3-compatible adapter; SHA-256 re-check on download | Live MinIO/AWS endpoint not verified in this build environment |
 | Extraction | pypdf, python-docx, Pillow, pytesseract/Tesseract | Full multimodal document understanding |
 | Verification | Pure deterministic Python checks | LLM truth adjudication |
 | Tests | pytest unit/integration + synthetic golden evaluator | Independent external validation |
@@ -75,6 +79,7 @@ pip install -e ".[dev]"
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 New-Item -ItemType Directory -Force data | Out-Null
 python -m alembic upgrade head
+python scripts/verify_database.py
 uvicorn apps.api.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -114,6 +119,47 @@ npm run build
 
 The participant has already confirmed a successful production build on the Windows development machine (2026-11-08). Re-run this command on the final submission checkout after the last source change.
 
+## PostgreSQL + pgvector development database
+
+The default local walkthrough uses SQLite. To exercise the PostgreSQL/pgvector path, start the development-only backing services from the repository root:
+
+```powershell
+docker compose -f infra/docker-compose.yml --profile infra up -d db
+```
+
+Set `POSTGRES_PASSWORD` and `DATABASE_URL` in `.env` to use the same local-only password (the example `.env` already provides a development-only value). For example:
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://sigillum:YOUR_LOCAL_PASSWORD@127.0.0.1:5432/sigillum
+```
+
+The Compose service reads `POSTGRES_PASSWORD`; set the same value in `.env` before starting it. Then run:
+
+```powershell
+python -m alembic upgrade head
+python scripts/verify_database.py
+```
+
+A forward-only Alembic migration installs the `vector` extension when the target is PostgreSQL; the original initial migration remains unchanged. The API's development startup also applies migrations automatically; production does not auto-migrate and must run the migration command as a deployment step. Do not use the sample local password or publish the database port on an untrusted network.
+
+## Optional S3-compatible object storage
+
+The local default remains private filesystem storage. To use MinIO or another S3-compatible endpoint, start the object store, create a private bucket, then set these values in `.env`:
+
+```dotenv
+STORAGE_BACKEND=s3
+S3_ENDPOINT_URL=http://127.0.0.1:9000
+S3_BUCKET=sigillum-private
+S3_REGION=us-east-1
+S3_ACCESS_KEY_ID=sigillum
+S3_SECRET_ACCESS_KEY=replace-with-a-local-secret
+S3_VERIFY_SSL=true
+```
+
+For a local MinIO development instance, provision the bucket using the MinIO Client (`mc`) or the provider console before starting the API. Development startup can create a missing bucket when access is permitted; production must provision its bucket and credentials outside the application. Do not expose the MinIO console or API publicly with sample local credentials. The S3-compatible adapter is covered by offline adapter tests; a live MinIO deployment test is still required before describing that external service as production-verified.
+
+Original files are served only through the authenticated API route. The route recomputes SHA-256 before returning bytes. The adapter does not generate public object URLs or expose storage credentials to the browser.
+
 ## Tests and evaluation
 
 From the repository root with the Python environment active:
@@ -121,6 +167,7 @@ From the repository root with the Python environment active:
 ```powershell
 pytest
 python scripts/evaluate_golden_cases.py
+python scripts/verify_database.py
 # With the API running in another terminal:
 python scripts/smoke_vertical_slice.py
 python -m compileall -q backend apps tests scripts
@@ -187,13 +234,13 @@ Review `docs/governance/AI_AND_REUSE_DISCLOSURE.md` before submission. The suppl
 
 ## Latest engineering verification
 
-- Backend test suite: **50 passed** in Build 008 (unit + integration).
+- Backend test suite: **96 passed, 1 skipped** in Build 012 (SQLite/local unit + integration suite); the skip is the explicit PostgreSQL-only RLS test.
 - Synthetic golden corpus: **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED, 0 FAIL** across 12 cases. The manual case is intentional: logo identity and contrast are not auto-certified.
-- Each review stores the full Brand Knowledge Pack snapshot, its SHA-256 fingerprint and the deterministic analysis-rule version. Build 008 evaluates valid time separately from record/system time and retains a lexical + structured RRF retrieval trace in evidence provenance. The API exposes a version-history timeline with hashes and decisions.
-- Participant Windows frontend verification: **lint passed, TypeScript passed, production build passed** on 2026-11-08. Keep the participant-generated `apps/web/package-lock.json` in the submission repository.
-- Live API vertical-slice smoke: **8 checks passed** against a clean local database: readiness, authentication, upload, evidence-linked contradiction, approval blocking, hash-bound correction, immutable version history, corrected-version approval and audit events. See `docs/technical/LIVE_VERTICAL_SLICE_SMOKE.md`.
+- Each review stores the full Brand Knowledge Pack snapshot, SHA-256 fingerprint and deterministic analysis-rule version. Build 008 added temporal truth and lexical + structured RRF provenance. Build 009 added private object storage and hash-verified original downloads. Build 010 made startup migration-driven. Build 011 added tenant/brand memberships, revocable sessions, access checks, workspace switching, member management, session-bound file grants and PostgreSQL RLS policies. Build 012 now isolates Knowledge Packs per tenant+brand, adds source registry and per-record owner decisions, private raster asset upload/preview, SHA-256 checks, same-brand storage-key enforcement, exact source-version/quote validation and rejected-terminology enforcement. PostgreSQL RLS remains pending hosted CI validation.
+- Participant Windows frontend verification: **lint/typecheck/build passed on 2026-11-08 before Build 011**. Build 011/012 frontend changes have had TypeScript/TSX syntax transpilation (14 files, 0 diagnostics), but still need full `npm run lint`, `npm run typecheck` and `npm run build`; package installation timed out in the authoring environment. Keep the existing `apps/web/package-lock.json`.
+- Live API vertical-slice smoke from Build 009: **9 checks passed** against a clean local database: readiness, authentication, upload, evidence-linked contradiction, approval blocking, hash-bound correction, immutable version history, corrected-version approval and audit events. See `docs/technical/LIVE_VERTICAL_SLICE_SMOKE.md`.
 
-See `docs/phase-gates/PHASE-02-STATUS.md`, `PHASE-07-STATUS.md` and `PHASE-08-STATUS.md` for remaining gate items and exact commands.
+See `docs/phase-gates/PHASE-02-STATUS.md`, `PHASE-03-STATUS.md`, `PHASE-07-STATUS.md` and `PHASE-08-STATUS.md` for remaining gate items and exact commands.
 
 
 ## Build 006 — Visual Evidence Intelligence

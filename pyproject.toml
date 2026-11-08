@@ -21,6 +21,7 @@ dependencies = [
   "pytesseract==0.3.13",
   "PyJWT==2.13.0",
   "psycopg[binary]==3.2.12",
+  "boto3==1.43.18",
 ]
 
 [project.optional-dependencies]

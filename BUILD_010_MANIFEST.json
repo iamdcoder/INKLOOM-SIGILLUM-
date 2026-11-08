@@ -1,0 +1,101 @@
+{
+  "build": "010",
+  "name": "Migration-Driven Database Lifecycle and PostgreSQL CI",
+  "base_build": "009",
+  "date": "2026-11-09",
+  "scope": [
+    "replace direct development Base.metadata.create_all startup with checked-in Alembic upgrade head",
+    "make Alembic migrations use the same validated SQLite/PostgreSQL engine factory as the API",
+    "enable SQLite foreign-key enforcement and bounded busy timeout; create configured parent directories",
+    "normalise PostgreSQL shorthand URLs to the pinned psycopg 3 driver and add bounded pooling and timeouts",
+    "report current and expected Alembic revision and database dialect in readiness; fail readiness if schema is not current",
+    "add a forward-only pgvector extension migration without changing the original initial migration",
+    "add a database verification CLI for revision, mapped tables and pgvector extension",
+    "add a PostgreSQL 17 + pgvector CI service job that migrates an empty database and runs backend regression checks",
+    "document local SQLite and PostgreSQL/pgvector setup, validation and remaining unverified services"
+  ],
+  "validation": {
+    "pytest": {
+      "status": "passed",
+      "count": 72,
+      "duration_seconds": 6.99,
+      "database": "SQLite/local"
+    },
+    "compileall": {
+      "status": "passed"
+    },
+    "database_verifier": {
+      "status": "passed",
+      "dialect": "sqlite",
+      "revision": "20261109_0002",
+      "missing_tables": []
+    },
+    "migration_from_empty_sqlite": {
+      "status": "passed",
+      "repeat_upgrade": "passed"
+    },
+    "sqlite_foreign_key_enforcement": {
+      "status": "passed"
+    },
+    "postgresql_url_normalisation": {
+      "status": "passed",
+      "driver": "postgresql+psycopg"
+    },
+    "ci_yaml_parse": {
+      "status": "passed",
+      "jobs": [
+        "backend",
+        "backend-postgres",
+        "frontend"
+      ]
+    },
+    "golden_evaluation": {
+      "pass": 11,
+      "manual_review_required": 1,
+      "fail": 0,
+      "total": 12
+    }
+  },
+  "not_run": {
+    "live_postgresql_pgvector": "No local PostgreSQL service; psycopg driver not installed in authoring runtime. CI service job configured; hosted run pending.",
+    "live_minio_or_aws": "No live S3-compatible endpoint available; offline fake-client tests remain.",
+    "ruff": "Ruff is not installed in authoring runtime.",
+    "frontend": "No frontend source changed in Build 010; no frontend rebuild performed."
+  },
+  "phase_status": {
+    "phase_02": "IN_PROGRESS; local migration lifecycle verified; hosted PostgreSQL CI job configured but its result is pending",
+    "phase_03": "NOT_STARTED_AS_A_RELEASE_GATE; current product remains a single synthetic demo workspace"
+  },
+  "changed_files": [
+    ".env.example",
+    ".github/workflows/ci.yml",
+    "README.md",
+    "alembic.ini",
+    "apps/api/main.py",
+    "backend/sigillum/config.py",
+    "backend/sigillum/infrastructure/database/migrations.py",
+    "backend/sigillum/infrastructure/database/session.py",
+    "docs/governance/AI_AND_REUSE_DISCLOSURE.md",
+    "docs/governance/BUILD_ACTIVITY_LOG.csv",
+    "docs/phase-gates/PHASE-02-EXIT.md",
+    "docs/phase-gates/PHASE-02-STATUS.md",
+    "docs/technical/BUILD_010_DATABASE_LIFECYCLE.md",
+    "docs/technical/IMPLEMENTATION_ARCHITECTURE.md",
+    "docs/technical/TEST_RESULTS.md",
+    "infra/docker-compose.yml",
+    "migrations/env.py",
+    "migrations/versions/20261109_0002_pgvector_extension.py",
+    "scripts/verify_database.py",
+    "tests/integration/test_api.py",
+    "tests/unit/test_database_lifecycle.py",
+    "reports/build010_database_verification.json",
+    "reports/build010_validation.json"
+  ],
+  "limitations": [
+    "No live PostgreSQL/pgvector service was available in the authoring runtime; configured hosted CI job must be observed passing after push.",
+    "No live MinIO/AWS endpoint was exercised.",
+    "Ruff lint was not run because Ruff is not installed in the authoring runtime.",
+    "Frontend source was not changed; frontend lint/typecheck/build were not rerun.",
+    "Durable worker execution, production tenant isolation/RLS, full vector retrieval and advanced governance remain future work."
+  ]
+}

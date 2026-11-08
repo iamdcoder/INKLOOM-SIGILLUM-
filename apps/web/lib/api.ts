@@ -1,6 +1,27 @@
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
 
-export type SessionUser = { id: string; email: string; display_name: string; role: string };
+export type WorkspaceOption = {
+  membership_id: string;
+  tenant_id: string;
+  tenant_name: string;
+  brand_record_id: string;
+  brand_id: string;
+  brand_name: string;
+  role: string;
+};
+
+export type SessionUser = {
+  id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  tenant_id?: string;
+  tenant_name?: string;
+  brand_id?: string;
+  brand_record_id?: string;
+  brand_name?: string;
+  workspaces?: WorkspaceOption[];
+};
 export type Finding = {
   id: string; code: string; category: string; severity: string; verdict: string;
   title: string; explanation: string; reason_code: string; evidence_sufficiency: string;

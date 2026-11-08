@@ -25,7 +25,9 @@ import {
 } from "lucide-react";
 import {
   api,
+  API_BASE,
   getSessionUserRaw,
+  getToken,
   parseSessionUser,
   subscribeToSession,
 } from "@/lib/api";
@@ -51,6 +53,32 @@ type PackSummary = {
   facts: number;
 };
 
+type SourceRecord = {
+  source_id: string;
+  name: string;
+  source_type: string;
+  version: number;
+  status: string;
+  sha256?: string | null;
+  source_uri?: string | null;
+  owner_id?: string;
+  approved_by?: string;
+  approved_at?: string;
+};
+
+type AssetRecord = {
+  asset_id: string;
+  name: string;
+  kind: string;
+  status: string;
+  mime_type?: string;
+  sha256?: string;
+  storage_key?: string;
+  width?: number;
+  height?: number;
+  approved_by?: string;
+};
+
 type PackSnapshot = {
   brand: Record<string, unknown>;
   facts: unknown[];
@@ -58,6 +86,7 @@ type PackSnapshot = {
   terminology: Record<string, unknown>;
   voice: Record<string, unknown>;
   assets: Record<string, unknown>;
+  sources?: { schema_version: string; sources: SourceRecord[] };
 };
 
 type PackVersion = {
@@ -100,7 +129,8 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string }> =
   { key: "policies", label: "Policy clauses", description: "Rules, severity, owner, scope and effective dates." },
   { key: "terminology", label: "Terminology", description: "Preferred terms, prohibited variants and scoped exceptions." },
   { key: "voice", label: "Voice guidance", description: "Voice traits, approved examples and disallowed patterns." },
-  { key: "assets", label: "Approved assets", description: "Asset manifest, approval status and usage metadata." },
+  { key: "assets", label: "Approved assets", description: "Upload, preview and owner-approve brand image assets." },
+  { key: "sources", label: "Source registry", description: "Register source evidence, versions, hashes and validity." },
   { key: "brand", label: "Brand identity", description: "Brand metadata, supported channels, locale and workspace identity." },
 ];
 
@@ -130,6 +160,15 @@ export default function BrandPage() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [recordDecisionReason, setRecordDecisionReason] = useState("");
+  const [sourceName, setSourceName] = useState("");
+  const [sourceType, setSourceType] = useState("reference_text");
+  const [sourceText, setSourceText] = useState("");
+  const [sourceUri, setSourceUri] = useState("");
+  const [assetName, setAssetName] = useState("");
+  const [assetKind, setAssetKind] = useState("logo");
+  const [assetFile, setAssetFile] = useState<File | null>(null);
+  const [assetPreviews, setAssetPreviews] = useState<Record<string, string>>({});
 
   async function refreshManagement() {
     const [current, detail] = await Promise.all([
@@ -166,6 +205,40 @@ export default function BrandPage() {
       cancelled = true;
     };
   }, [canViewManagement]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const objectUrls: string[] = [];
+    async function loadAssetPreviews() {
+      if (!draft || activeSection !== "assets") {
+        setAssetPreviews({});
+        return;
+      }
+      const records = ((draft.snapshot.assets.approved_assets as AssetRecord[] | undefined) || [])
+        .filter((asset) => asset.storage_key);
+      const token = getToken();
+      const entries = await Promise.all(records.map(async (asset) => {
+        try {
+          const response = await fetch(`${API_BASE}/brands/current/drafts/${draft.draft_id}/assets/${asset.asset_id}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            cache: "no-store",
+          });
+          if (!response.ok) return [asset.asset_id, ""] as const;
+          const url = URL.createObjectURL(await response.blob());
+          objectUrls.push(url);
+          return [asset.asset_id, url] as const;
+        } catch {
+          return [asset.asset_id, ""] as const;
+        }
+      }));
+      if (!cancelled) setAssetPreviews(Object.fromEntries(entries.filter((entry) => entry[1])));
+    }
+    void loadAssetPreviews();
+    return () => {
+      cancelled = true;
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [activeSection, draft]);
 
   async function startDraft() {
     setBusy(true);
@@ -222,6 +295,115 @@ export default function BrandPage() {
     }
   }
 
+  async function addSourceRecord() {
+    if (!draft) return;
+    if (!sourceName.trim() || (!sourceText.trim() && !sourceUri.trim())) {
+      setError("Provide a source name and either reference text or an HTTP(S) URI.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{ source: SourceRecord }>(`/brands/current/drafts/${draft.draft_id}/sources`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: sourceName.trim(),
+          source_type: sourceType,
+          version: 1,
+          reference_text: sourceText.trim() || null,
+          source_uri: sourceUri.trim() || null,
+        }),
+      });
+      const registry = draft.snapshot.sources || { schema_version: "1.0.0", sources: [] };
+      const nextRegistry = { ...registry, sources: [...registry.sources, result.source] };
+      setDraft((current) => current ? { ...current, status: "DRAFT", snapshot: { ...current.snapshot, sources: nextRegistry } } : current);
+      setEditorText(JSON.stringify(nextRegistry, null, 2));
+      setSourceName("");
+      setSourceText("");
+      setSourceUri("");
+      setValidation(null);
+      setNotice("Source registered in this draft. It remains non-authoritative until approved and the pack is published.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to register the source.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadBrandAsset() {
+    if (!draft || !assetFile) {
+      setError("Choose a PNG, JPEG or WebP image before uploading.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const form = new FormData();
+      form.append("file", assetFile);
+      form.append("name", assetName.trim() || assetFile.name);
+      form.append("kind", assetKind);
+      const result = await api<{ asset: AssetRecord }>(`/brands/current/drafts/${draft.draft_id}/assets`, {
+        method: "POST",
+        body: form,
+      });
+      setDraft((current) => {
+        if (!current) return current;
+        const currentAssets = (current.snapshot.assets.approved_assets as AssetRecord[] | undefined) || [];
+        return {
+          ...current,
+          status: "DRAFT",
+          snapshot: {
+            ...current.snapshot,
+            assets: { ...current.snapshot.assets, approved_assets: [...currentAssets, result.asset] },
+          },
+        };
+      });
+      setAssetFile(null);
+      setAssetName("");
+      setValidation(null);
+      setNotice("Asset uploaded privately as a draft record. A Brand Owner must explicitly approve it before publication.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to upload the brand asset.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function decideKnowledgeRecord(
+    recordType: "fact" | "policy" | "term" | "source" | "asset",
+    recordId: string,
+    status: "approved" | "rejected",
+  ) {
+    if (!draft) return;
+    const reasonText = recordDecisionReason.trim();
+    if (!reasonText) {
+      setError("Enter a reason before recording a Knowledge Pack decision.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/brands/current/drafts/${draft.draft_id}/records/${recordType}/${recordId}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ status, reason: reasonText }),
+      });
+      const latest = await api<DraftPayload>(`/brands/current/drafts/${draft.draft_id}`);
+      setDraft(latest);
+      setEditorText(JSON.stringify(latest.snapshot[activeSection] ?? {}, null, 2));
+      setValidation(null);
+      setRecordDecisionReason("");
+      const label = ({ fact: "Fact", policy: "Policy", term: "Terminology", source: "Source", asset: "Asset" } as const)[recordType];
+      setNotice(`${label} ${status === "approved" ? "approved" : "rejected"} in the draft. The change becomes authoritative only after pack publication.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to update this record decision.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function validateDraft() {
     if (!draft) return;
     if (isEditorDirty) {
@@ -268,6 +450,15 @@ export default function BrandPage() {
   const isEditorDirty = draft ? editorText !== JSON.stringify(draft.snapshot[activeSection], null, 2) : false;
   const activeFacts = Array.isArray(management?.snapshot.facts) ? management.snapshot.facts.length : summary?.facts ?? 0;
   const activePolicies = Array.isArray(management?.snapshot.policies) ? management.snapshot.policies.length : summary?.policies ?? 0;
+  const draftSources = draft?.snapshot.sources?.sources || [];
+  const draftAssets = ((draft?.snapshot.assets.approved_assets as AssetRecord[] | undefined) || []);
+  const draftFacts = (draft?.snapshot.facts || []) as Array<Record<string, unknown> & { fact_id?: string; status?: string }> ;
+  const draftPolicies = (draft?.snapshot.policies || []) as Array<Record<string, unknown> & { policy_id?: string; name?: string; status?: string }> ;
+  const terminology = draft?.snapshot.terminology || {};
+  const draftTerms = [
+    ...((terminology.preferred_terms as Array<Record<string, unknown> & { term_id?: string; preferred?: string; status?: string }> | undefined) || []),
+    ...((terminology.prohibited_or_review_terms as Array<Record<string, unknown> & { term_id?: string; variant?: string; status?: string }> | undefined) || []),
+  ];
 
   return (
     <div className="page-stack">
@@ -376,6 +567,121 @@ export default function BrandPage() {
                 </nav>
                 <div className="knowledge-editor-main">
                   <div className="knowledge-editor-toolbar"><div><b>{SECTIONS.find((section) => section.key === activeSection)?.label}</b><small>{sectionDescription}</small></div><span>{isEditorDirty ? "UNSAVED" : "JSON"}</span></div>
+                  {["facts", "policies", "terminology", "sources", "assets"].includes(activeSection) && (
+                    <label className="knowledge-decision-reason">Decision reason<input value={recordDecisionReason} onChange={(event) => setRecordDecisionReason(event.target.value)} maxLength={1000} placeholder="Explain why this record is approved or rejected." /></label>
+                  )}
+                  {activeSection === "facts" && (
+                    <div className="knowledge-guided-panel">
+                      <div className="eyebrow">FACT APPROVAL REGISTER</div>
+                      <p className="knowledge-guided-note">Only facts with approved, version-matched source evidence can pass publication validation. Draft facts are never authoritative.</p>
+                      <div className="knowledge-record-list">
+                        {draftFacts.map((fact, index) => {
+                          const id = String(fact.fact_id || `fact-${index}`);
+                          const status = String(fact.status || "draft");
+                          return (
+                            <div className="knowledge-record-row" key={id}>
+                              <div><b>{String(fact.subject || id)}</b><small>{id} · {String(fact.predicate || "Unspecified predicate")}</small><small>{String(fact.qualifier || "")}{fact.value !== undefined ? ` ${String(fact.value)}${String(fact.unit || "")}` : ""} · source {String((fact.source_ref as Record<string, unknown> | undefined)?.source_id || "not linked")}</small></div>
+                              <span className={`status-pill ${status === "approved" ? "success" : "warning"}`}><i />{status}</span>
+                              {status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("fact", id, "approved")} disabled={busy}>Approve</button>}
+                              {status !== "rejected" && <button className="button secondary" onClick={() => decideKnowledgeRecord("fact", id, "rejected")} disabled={busy}>Reject</button>}
+                            </div>
+                          );
+                        })}
+                        {draftFacts.length === 0 && <p className="knowledge-guided-empty">No facts have been registered for this brand.</p>}
+                      </div>
+                    </div>
+                  )}
+                  {activeSection === "policies" && (
+                    <div className="knowledge-guided-panel">
+                      <div className="eyebrow">POLICY APPROVAL REGISTER</div>
+                      <p className="knowledge-guided-note">Policy rules and severity are owner-governed. Rejected or draft policies do not govern a published pack.</p>
+                      <div className="knowledge-record-list">
+                        {draftPolicies.map((policy, index) => {
+                          const id = String(policy.policy_id || `policy-${index}`);
+                          const status = String(policy.status || "draft");
+                          return (
+                            <div className="knowledge-record-row" key={id}>
+                              <div><b>{String(policy.name || id)}</b><small>{id} · {String(policy.category || "uncategorised")} · {String(policy.severity || "no severity")}</small><small>{String(policy.rule || "No policy rule text")}</small></div>
+                              <span className={`status-pill ${status === "approved" ? "success" : "warning"}`}><i />{status}</span>
+                              {status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("policy", id, "approved")} disabled={busy}>Approve</button>}
+                              {status !== "rejected" && <button className="button secondary" onClick={() => decideKnowledgeRecord("policy", id, "rejected")} disabled={busy}>Reject</button>}
+                            </div>
+                          );
+                        })}
+                        {draftPolicies.length === 0 && <p className="knowledge-guided-empty">No policies have been registered for this brand.</p>}
+                      </div>
+                    </div>
+                  )}
+                  {activeSection === "terminology" && (
+                    <div className="knowledge-guided-panel">
+                      <div className="eyebrow">TERMINOLOGY APPROVAL REGISTER</div>
+                      <p className="knowledge-guided-note">Canonical terms and prohibited variants are kept distinct from factual evidence. Owner decisions apply only after publication.</p>
+                      <div className="knowledge-record-list">
+                        {draftTerms.map((term, index) => {
+                          const id = String(term.term_id || `term-${index}`);
+                          const status = String(term.status || "draft");
+                          const termText = String(term.preferred || term.variant || id);
+                          return (
+                            <div className="knowledge-record-row" key={id}>
+                              <div><b>{termText}</b><small>{id} · {term.preferred ? "Preferred" : "Prohibited / review"} · {String(term.locale || "all locales")}</small><small>{String(term.reason || "")}</small></div>
+                              <span className={`status-pill ${status === "approved" ? "success" : "warning"}`}><i />{status}</span>
+                              {status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("term", id, "approved")} disabled={busy}>Approve</button>}
+                              {status !== "rejected" && <button className="button secondary" onClick={() => decideKnowledgeRecord("term", id, "rejected")} disabled={busy}>Reject</button>}
+                            </div>
+                          );
+                        })}
+                        {draftTerms.length === 0 && <p className="knowledge-guided-empty">No terminology records have been registered for this brand.</p>}
+                      </div>
+                    </div>
+                  )}
+                  {activeSection === "sources" && (
+                    <div className="knowledge-guided-panel">
+                      <div className="eyebrow">REGISTER EVIDENCE SOURCE</div>
+                      <p className="knowledge-guided-note">Source URLs are recorded as provenance metadata and are never fetched automatically. Paste the exact authorised excerpt needed for evidence review.</p>
+                      <div className="knowledge-guided-grid">
+                        <label>Source name<input value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="Official product specification" maxLength={240} /></label>
+                        <label>Source type<select value={sourceType} onChange={(event) => setSourceType(event.target.value)}><option value="reference_text">Reference text</option><option value="product_specification">Product specification</option><option value="campaign_terms">Campaign terms</option><option value="policy_document">Policy document</option><option value="guideline">Brand guideline</option><option value="other">Other</option></select></label>
+                        <label className="wide">Reference excerpt<textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} rows={3} maxLength={20000} placeholder="Paste the exact approved excerpt that can substantiate a fact or rule." /></label>
+                        <label className="wide">Source URI (optional)<input value={sourceUri} onChange={(event) => setSourceUri(event.target.value)} placeholder="https://..." maxLength={2048} /></label>
+                      </div>
+                      <button className="button secondary" onClick={addSourceRecord} disabled={busy}><Plus size={14} /> Register source as draft</button>
+                      <div className="knowledge-record-list">
+                        {draftSources.map((source) => (
+                          <div className="knowledge-record-row" key={source.source_id}>
+                            <div><b>{source.name}</b><small>{source.source_id} · v{source.version} · {source.source_type}</small><small>{source.sha256 ? `SHA-256 ${shortHash(source.sha256)}` : source.source_uri || "Reference text retained in registry"}</small></div>
+                            <span className={`status-pill ${source.status === "approved" ? "success" : "warning"}`}><i />{source.status}</span>
+                            {source.status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("source", source.source_id, "approved")} disabled={busy}>Approve</button>}
+                            {source.status !== "rejected" && <button className="button secondary" onClick={() => decideKnowledgeRecord("source", source.source_id, "rejected")} disabled={busy}>Reject</button>}
+                          </div>
+                        ))}
+                        {draftSources.length === 0 && <p className="knowledge-guided-empty">No sources registered in this draft yet.</p>}
+                      </div>
+                    </div>
+                  )}
+                  {activeSection === "assets" && (
+                    <div className="knowledge-guided-panel">
+                      <div className="eyebrow">UPLOAD BRAND ASSET</div>
+                      <div className="knowledge-guided-grid">
+                        <label>Display name<input value={assetName} onChange={(event) => setAssetName(event.target.value)} placeholder="Primary campaign logo" maxLength={160} /></label>
+                        <label>Asset type<select value={assetKind} onChange={(event) => setAssetKind(event.target.value)}><option value="logo">Logo</option><option value="product_image">Product image</option><option value="campaign_image">Campaign image</option><option value="icon">Icon</option><option value="other">Other</option></select></label>
+                        <label className="wide">Image file<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setAssetFile(event.target.files?.[0] || null)} /></label>
+                      </div>
+                      <p className="knowledge-guided-note">PNG, JPEG or WebP only. SVG/script-bearing files are rejected. Uploads remain private and unapproved until an owner decision. Raster decoding and size checks are applied; a separate malware-scanning service is not yet integrated.</p>
+                      <button className="button secondary" onClick={uploadBrandAsset} disabled={busy || !assetFile}><UploadCloud size={14} /> Upload as draft asset</button>
+                      <div className="knowledge-record-list">
+                        {draftAssets.map((asset) => (
+                          <div className="knowledge-record-row asset-row" key={asset.asset_id}>
+                            {assetPreviews[asset.asset_id] ? <img src={assetPreviews[asset.asset_id]} alt={`Preview of ${asset.name}`} /> : <div className="knowledge-asset-placeholder"><ShieldCheck size={17} /></div>}
+                            <div><b>{asset.name}</b><small>{asset.asset_id} · {asset.kind} · {asset.mime_type || "legacy asset"}</small><small>{asset.sha256 ? `SHA-256 ${shortHash(asset.sha256)}` : "Seeded asset record"}</small></div>
+                            <span className={`status-pill ${asset.status === "approved" ? "success" : "warning"}`}><i />{asset.status}</span>
+                            {asset.status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("asset", asset.asset_id, "approved")} disabled={busy || !asset.storage_key}>Approve</button>}
+                            {asset.status !== "rejected" && <button className="button secondary" onClick={() => decideKnowledgeRecord("asset", asset.asset_id, "rejected")} disabled={busy}>Reject</button>}
+                          </div>
+                        ))}
+                        {draftAssets.length === 0 && <p className="knowledge-guided-empty">No assets registered in this draft yet.</p>}
+                      </div>
+                    </div>
+                  )}
                   <label className="visually-hidden" htmlFor="knowledge-pack-json">Edit {activeSection} JSON</label>
                   <textarea id="knowledge-pack-json" className="knowledge-json-editor" spellCheck={false} value={editorText} onChange={(event) => { setEditorText(event.target.value); setValidation(null); }} />
                   <div className="knowledge-editor-actions"><span>Save updates this draft only. It does not change the active pack.</span><button className="button secondary" onClick={saveSection} disabled={busy || !isEditorDirty}><Save size={14} /> Save section</button></div>

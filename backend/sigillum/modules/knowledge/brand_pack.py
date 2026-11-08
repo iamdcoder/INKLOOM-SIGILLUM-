@@ -29,6 +29,12 @@ class BrandPack:
     def voice(self): return self._load("voice.json")
     @property
     def assets(self): return self._load("asset_manifest.json")
+    @property
+    def sources(self):
+        path = self.root / "sources.json"
+        if not path.exists():
+            return {"schema_version": "1.0.0", "sources": []}
+        return self._load("sources.json")
 
     def version(self) -> str:
         return str(self.brand.get("pack_version", "unknown"))
@@ -40,7 +46,7 @@ class BrandPack:
         record family that can influence a finding. Reviews persist this snapshot
         so an operator can reconstruct the inputs even if the fixture changes.
         """
-        return {
+        snapshot = {
             "brand": self.brand,
             "facts": self.facts,
             "policies": self.policies,
@@ -48,6 +54,11 @@ class BrandPack:
             "voice": self.voice,
             "assets": self.assets,
         }
+        # Older immutable packs predate the source registry. Do not silently
+        # change their historical fingerprint merely because this property exists.
+        if (self.root / "sources.json").exists():
+            snapshot["sources"] = self.sources
+        return snapshot
 
     def fingerprint(self) -> str:
         """Return a stable SHA-256 fingerprint of the complete pack snapshot."""

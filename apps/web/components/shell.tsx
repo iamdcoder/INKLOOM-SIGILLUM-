@@ -1,9 +1,9 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { ArrowUpRight, BookOpen, Command, FilePlus2, Files, LayoutDashboard, LogOut, ScanEye, ShieldCheck } from "lucide-react";
-import { clearSession, getSessionUserRaw, parseSessionUser, subscribeToSession } from "@/lib/api";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { ArrowUpRight, BookOpen, Command, FilePlus2, Files, LayoutDashboard, LogOut, ScanEye, ShieldCheck, Users } from "lucide-react";
+import { api, clearSession, getSessionUserRaw, parseSessionUser, saveSession, subscribeToSession, type SessionUser, type WorkspaceOption } from "@/lib/api";
 
 const navigation = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
@@ -22,13 +22,48 @@ export function Shell({ children }: { children: React.ReactNode }) {
     () => null,
   );
   const user = useMemo(() => parseSessionUser(userSnapshot), [userSnapshot]);
+  const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
+  const [workspaceSwitchError, setWorkspaceSwitchError] = useState("");
+  const visibleNavigation = user && ["brand_owner", "administrator"].includes(user.role)
+    ? [...navigation, { href: "/admin/members", label: "Workspace access", icon: Users }]
+    : navigation;
 
   useEffect(() => {
-    if (pathname !== "/login" && !sessionStorage.getItem("sigillum_token")) {
+    if (pathname === "/login") return;
+    if (!sessionStorage.getItem("sigillum_token")) {
       router.replace("/login");
+      return;
     }
-  }, [pathname, router]);
-  const logout = () => { clearSession(); router.replace("/login"); };
+    let cancelled = false;
+    api("/auth/me").catch(() => {
+      if (!cancelled) {
+        clearSession();
+        router.replace("/login");
+      }
+    });
+    return () => { cancelled = true; };
+  }, [pathname, router, userSnapshot]);
+  const switchWorkspace = async (brandRecordId: string) => {
+    if (!brandRecordId || brandRecordId === user?.brand_record_id || switchingWorkspace) return;
+    setSwitchingWorkspace(true);
+    setWorkspaceSwitchError("");
+    try {
+      const result = await api<{ access_token: string; user: SessionUser; workspaces: WorkspaceOption[] }>(
+        "/auth/switch-context",
+        { method: "POST", body: JSON.stringify({ brand_id: brandRecordId }) },
+      );
+      saveSession(result.access_token, { ...result.user, workspaces: result.workspaces || [] });
+      router.replace("/");
+    } catch (error) {
+      setWorkspaceSwitchError(error instanceof Error ? error.message : "Unable to switch workspace.");
+    } finally {
+      setSwitchingWorkspace(false);
+    }
+  };
+  const logout = async () => {
+    try { await api("/auth/logout", { method: "POST" }); } catch { /* local session is still cleared if the API is unavailable */ }
+    finally { clearSession(); router.replace("/login"); }
+  };
   if (pathname === "/login") return <>{children}</>;
   return (
     <div className="app-shell">
@@ -37,9 +72,28 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <span className="brand-mark"><ScanEye size={21}/></span>
           <span><b>INKLOOM</b><small>SIGILLUM</small></span>
         </Link>
-        <div className="workspace-switch"><span className="workspace-dot"/><span><b>ORBITA</b><small>Demo workspace · 1 brand</small></span><ArrowUpRight size={14}/></div>
+        <div className="workspace-switch">
+          <span className="workspace-dot"/>
+          <span className="workspace-switch-label"><b>{user?.brand_name || "Brand workspace"}</b><small>{user?.tenant_name || "Workspace"}</small></span>
+          {user?.workspaces && user.workspaces.length > 1 ? (
+            <select
+              className="workspace-selector"
+              aria-label="Switch workspace and brand"
+              value={user.brand_record_id || ""}
+              disabled={switchingWorkspace}
+              onChange={(event) => void switchWorkspace(event.target.value)}
+            >
+              {user.workspaces.map((workspace) => (
+                <option key={workspace.membership_id} value={workspace.brand_record_id}>
+                  {workspace.tenant_name} · {workspace.brand_name}
+                </option>
+              ))}
+            </select>
+          ) : <ArrowUpRight size={14}/>}
+          {workspaceSwitchError && <small className="workspace-switch-error" role="alert">{workspaceSwitchError}</small>}
+        </div>
         <div className="nav-label">WORKSPACE</div>
-        <nav className="nav-list">{navigation.map((item) => {
+        <nav className="nav-list">{visibleNavigation.map((item) => {
           const Icon = item.icon; const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
           return <Link key={item.href} href={item.href} className={`nav-link ${active ? "active" : ""}`}><Icon size={17}/><span>{item.label}</span>{item.href === "/submissions" && <span className="nav-count">LIVE</span>}</Link>;
         })}</nav>

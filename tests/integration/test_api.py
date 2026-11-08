@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy import select
 from fastapi.testclient import TestClient
 from apps.api.main import app
 
@@ -7,6 +8,12 @@ def client():
     with TestClient(app) as test_client:
         yield test_client
 
+def _brand_record_id(db, user_id):
+    from sigillum.infrastructure.database import models
+    membership = db.scalar(select(models.Membership).where(models.Membership.user_id == user_id, models.Membership.is_active.is_(True)))
+    return membership.brand_id
+
+
 def token(client, email="creator@orbita.demo", password="ChangeMe-Local-Only"):
     response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
     assert response.status_code == 200, response.text
@@ -14,7 +21,106 @@ def token(client, email="creator@orbita.demo", password="ChangeMe-Local-Only"):
 
 def test_health_endpoints(client):
     assert client.get("/health/live").json()["status"] == "ok"
-    assert client.get("/health/ready").json()["status"] == "ready"
+    readiness = client.get("/health/ready")
+    assert readiness.status_code == 200
+    assert readiness.json()["status"] == "ready"
+    assert readiness.json()["database"] == "connected"
+    assert readiness.json()["database_schema"] == "current"
+    assert readiness.json()["migration_revision"] == readiness.json()["expected_migration_revision"]
+    assert readiness.json()["database_dialect"] in {"sqlite", "postgresql"}
+    assert readiness.json()["storage"] == "available"
+    assert readiness.json()["storage_driver"] == "local_filesystem"
+
+
+def test_storage_outage_is_not_misreported_as_a_parse_failure(client, monkeypatch):
+    from sigillum.api import routes
+    from sigillum.infrastructure.storage import StorageUnavailable
+
+    class UnavailableStorage:
+        def put_bytes(self, key, data, content_type=None):
+            raise StorageUnavailable("simulated object store outage")
+
+    monkeypatch.setattr(routes, "get_storage", lambda settings: UnavailableStorage())
+
+    creator = token(client)
+    headers = {"Authorization": f"Bearer {creator}"}
+    response = client.post(
+        "/api/v1/submissions",
+        headers=headers,
+        data={
+            "title": "Storage failure state",
+            "channel": "direct_web",
+            "locale": "en-IN",
+            "geography": "IN",
+            "audience": "consumer",
+            "offer_id": "OFFER-ORBITA-OCT-NOV-2026",
+            "publication_at": "2026-11-10T12:00:00+05:30",
+        },
+        files={"file": ("storage-outage.txt", b"A simple ORBITA product description.", "text/plain")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "STORAGE_UNAVAILABLE"
+    listing = client.get("/api/v1/submissions", headers=headers)
+    assert listing.status_code == 200
+    assert all(item["title"] != "Storage failure state" for item in listing.json())
+
+
+def test_uploaded_original_download_is_authenticated_and_hash_verified(client):
+    from hashlib import sha256
+
+    from apps.api.main import SessionLocal
+    from sigillum.config import get_settings
+    from sigillum.infrastructure.database import models
+    from sigillum.infrastructure.storage import get_storage
+
+    creator = token(client)
+    headers = {"Authorization": f"Bearer {creator}"}
+    original = b"A calm product description for the ORBITA Air One."
+    submitted = client.post(
+        "/api/v1/submissions",
+        headers=headers,
+        data={
+            "title": "Original content download integrity",
+            "channel": "direct_web",
+            "locale": "en-IN",
+            "geography": "IN",
+            "audience": "consumer",
+            "offer_id": "OFFER-ORBITA-OCT-NOV-2026",
+            "publication_at": "2026-11-10T12:00:00+05:30",
+        },
+        files={"file": ("original.txt", original, "text/plain")},
+    )
+    assert submitted.status_code == 200, submitted.text
+    version_id = submitted.json()["content_version"]["id"]
+
+    downloaded = client.get(
+        f"/api/v1/content-versions/{version_id}/download",
+        headers=headers,
+    )
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == original
+    assert sha256(downloaded.content).hexdigest() == submitted.json()["content_version"]["sha256"]
+    assert downloaded.headers["x-content-type-options"] == "nosniff"
+    assert downloaded.headers["cache-control"] == "private, no-store"
+
+    with SessionLocal() as db:
+        actor = db.scalar(select(models.User).where(models.User.email == "creator@orbita.demo"))
+        from sigillum.infrastructure.database.session import set_database_scope
+        set_database_scope(db, user_id=actor.id)
+        brand_record_id = _brand_record_id(db, actor.id)
+        set_database_scope(db, user_id=actor.id, tenant_id="tenant_demo", brand_id="brand_orbita_demo", brand_record_id=brand_record_id, membership_role="creator")
+        version = db.get(models.ContentVersion, version_id)
+        storage_key = version.storage_key
+    get_storage(get_settings()).put_bytes(storage_key, b"tampered original", "text/plain")
+
+    tampered = client.get(
+        f"/api/v1/content-versions/{version_id}/download",
+        headers=headers,
+    )
+    assert tampered.status_code == 503
+    assert tampered.json()["detail"]["code"] == "ARTEFACT_INTEGRITY_FAILURE"
+
 
 def test_upload_review_and_role_gated_approval(client):
     creator = token(client)
@@ -201,8 +307,16 @@ def test_creator_cannot_read_another_creators_submission(client):
                 tenant_id="tenant_demo",
             )
             db.add(second)
+            db.flush()
         else:
             second.password_hash = hash_password("Second-Creator-Password")
+        from sigillum.infrastructure.database.session import set_database_scope
+        set_database_scope(db, user_id=second.id, tenant_id="tenant_demo", brand_id="brand_orbita_demo", membership_role="administrator")
+        brand = db.scalar(select(models.Brand).where(models.Brand.tenant_id == "tenant_demo", models.Brand.external_id == "brand_orbita_demo"))
+        set_database_scope(db, user_id=second.id, tenant_id="tenant_demo", brand_id="brand_orbita_demo", brand_record_id=brand.id, membership_role="administrator")
+        existing_membership = db.scalar(select(models.Membership).where(models.Membership.user_id == second.id, models.Membership.brand_id == brand.id))
+        if not existing_membership:
+            db.add(models.Membership(user_id=second.id, tenant_id="tenant_demo", brand_id=brand.id, role="creator", is_active=True))
         db.commit()
 
     creator_two = token(client, "creator.two@orbita.demo", "Second-Creator-Password")

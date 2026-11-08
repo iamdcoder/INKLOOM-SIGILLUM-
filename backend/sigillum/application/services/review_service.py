@@ -4,13 +4,31 @@ from pathlib import Path
 from uuid import uuid4
 from sqlalchemy.orm import Session
 from sigillum.infrastructure.database import models
+from sigillum.infrastructure.storage import LocalFilesystemStorage, ObjectStorage
 from sigillum.modules.content.extraction import extract
 from sigillum.modules.knowledge.brand_pack import BrandPack
 from sigillum.modules.verification.engine import VerificationEngine
 
 class ReviewService:
-    def __init__(self, db: Session, pack: BrandPack, storage_root: Path):
-        self.db=db; self.pack=pack; self.storage_root=storage_root; self.engine=VerificationEngine(pack)
+    def __init__(
+        self,
+        db: Session,
+        pack: BrandPack,
+        storage: ObjectStorage | Path | str | None = None,
+        *,
+        storage_root: Path | str | None = None,
+    ):
+        selected_storage = storage if storage is not None else storage_root
+        if selected_storage is None:
+            raise ValueError("ReviewService requires an object-storage adapter or storage root.")
+        self.db = db
+        self.pack = pack
+        self.storage = (
+            selected_storage
+            if hasattr(selected_storage, "put_bytes")
+            else LocalFilesystemStorage(selected_storage)
+        )
+        self.engine = VerificationEngine(pack)
 
     def _contrast_threshold(self, submission: models.Submission) -> float | None:
         """Resolve only an approved, in-scope threshold from the current demo pack."""
@@ -31,9 +49,7 @@ class ReviewService:
         digest=sha256(data).hexdigest()
         version_number=len(submission.versions)+1
         storage_key=f"{submission.id}/{version_number}/{uuid4().hex}{Path(filename).suffix.lower()}"
-        target=self.storage_root/storage_key
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        self.storage.put_bytes(storage_key, data, content_type=mime_type)
         version=models.ContentVersion(submission_id=submission.id,version_number=version_number,filename=Path(filename).name,mime_type=mime_type,storage_key=storage_key,sha256=digest,size_bytes=len(data),extracted_text=result.text,extraction_confidence=result.confidence,extraction_status=result.status,extraction_warnings=result.warnings,regions=result.regions,created_by=actor.id)
         self.db.add(version); self.db.flush()
         submission.current_version_id=version.id
@@ -172,5 +188,24 @@ class ReviewService:
         submission.status="NEEDS_REVIEW" if findings else "ANALYSED"
         return review, findings
 
-def audit(db: Session, tenant_id: str, actor_id: str | None, event_type: str, entity_type: str, entity_id: str, details: dict | None=None):
-    db.add(models.AuditEvent(tenant_id=tenant_id,actor_id=actor_id,event_type=event_type,entity_type=entity_type,entity_id=entity_id,details=details or {}))
+def audit(
+    db: Session,
+    tenant_id: str,
+    actor_id: str | None,
+    event_type: str,
+    entity_type: str,
+    entity_id: str,
+    details: dict | None = None,
+    brand_id: str | None = None,
+):
+    db.add(
+        models.AuditEvent(
+            tenant_id=tenant_id,
+            brand_id=brand_id,
+            actor_id=actor_id,
+            event_type=event_type,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            details=details or {},
+        )
+    )

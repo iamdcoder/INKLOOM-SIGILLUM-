@@ -10,6 +10,7 @@ confirms a new immutable version, and approves that exact version as a reviewer.
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import json
 import os
 import sys
@@ -141,6 +142,17 @@ def main() -> int:
         report["submission_id"] = submission_id
         report["initial_review_id"] = first_review_id
         report["checks"].append("Upload, immutable v1 and source-linked CONTRADICTED finding")
+
+        original_download = client.get(
+            f"{API_PREFIX}/content-versions/{first_version['id']}/download",
+            headers=creator_headers,
+        )
+        require(original_download.status_code == 200, "Authenticated original-file download failed")
+        require(
+            sha256(original_download.content).hexdigest() == first_hash,
+            "Downloaded original failed the content-hash integrity check",
+        )
+        report["checks"].append("Authenticated original download passed SHA-256 verification")
 
         blocked = client.post(
             f"{API_PREFIX}/reviews/{first_review_id}/decisions",

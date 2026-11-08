@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from uuid import uuid4
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, JSON, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sigillum.infrastructure.database.session import Base
 
@@ -17,6 +17,51 @@ class User(Base):
     tenant_id: Mapped[str] = mapped_column(String(80), default="tenant_demo")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Brand(Base):
+    __tablename__ = "brands"
+    __table_args__ = (UniqueConstraint("tenant_id", "external_id", name="uq_brand_tenant_external_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(String(80), ForeignKey("tenants.id"), index=True)
+    external_id: Mapped[str] = mapped_column(String(80), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Membership(Base):
+    __tablename__ = "memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", "brand_id", name="uq_membership_user_brand"),
+        Index("ix_memberships_user_active", "user_id", "is_active"),
+        Index("ix_memberships_tenant_brand", "tenant_id", "brand_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(80), ForeignKey("tenants.id"), index=True)
+    brand_id: Mapped[str] = mapped_column(String(36), ForeignKey("brands.id"), index=True)
+    role: Mapped[str] = mapped_column(String(40), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)  # JWT jti
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(String(36), ForeignKey("memberships.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 
 class Submission(Base):
     __tablename__ = "submissions"
@@ -128,6 +173,7 @@ class AuditEvent(Base):
     __tablename__ = "audit_events"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     tenant_id: Mapped[str] = mapped_column(String(80), index=True)
+    brand_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     event_type: Mapped[str] = mapped_column(String(100), index=True)
     entity_type: Mapped[str] = mapped_column(String(80))

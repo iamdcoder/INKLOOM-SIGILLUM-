@@ -1,0 +1,85 @@
+{
+  "project": "Inkloom Sigillum",
+  "build": "012",
+  "base_build": "011",
+  "cumulative_source_snapshot": true,
+  "date": "2026-11-09",
+  "phase": "04 \u2014 Brand Control Center and Knowledge Pack lifecycle",
+  "phase_gate": "PARTIALLY IMPLEMENTED \u2014 tenant+brand pack isolation, source/record governance and private raster asset workflows added; filesystem metadata, distributed locking, source-document import, malware scanning, advanced constraints and formal browser evidence remain pending",
+  "migration_head": "20261109_0003",
+  "database_migration_added": false,
+  "major_additions": [
+    "Tenant+brand-scoped Knowledge Pack version and draft namespaces",
+    "Neutral empty starter packs for non-demo brands",
+    "One-time legacy tenant-only pack migration limited to the original ORBITA brand",
+    "Source registry with version, owner, approval state, validity, excerpt/URI metadata and excerpt hash",
+    "Owner approve/reject/draft/not-approved decisions for facts, policies, terms, sources and assets",
+    "Mandatory reason for owner record decisions; draft decisions do not affect reviews until pack publication",
+    "Private PNG/JPEG/WebP brand asset upload with decoded image validation and dimensions",
+    "SHA-256 asset verification on draft validation, preview and published retrieval",
+    "Tenant+brand storage-key enforcement for approved uploaded assets",
+    "Approved fact source-version and source-quote validation",
+    "Explicit rejected/draft terminology excluded from verification",
+    "Updated Brand Control Center UI, API documentation, requirements traceability and phase-gate status"
+  ],
+  "validation": {
+    "backend_tests": {
+      "collected": 97,
+      "passed": 96,
+      "failed": 0,
+      "skipped": 1,
+      "database": "SQLite",
+      "skip_reason": "PostgreSQL-only RLS runtime test; live PostgreSQL service was unavailable"
+    },
+    "python_compileall": "PASS \u2014 backend, apps, migrations, tests and scripts",
+    "database_verifier": "PASS \u2014 SQLite migration current at 20261109_0003; all 12 required tables present; RLS not applicable to SQLite",
+    "alembic_upgrade_head": "PASS \u2014 database already at 20261109_0003; Build 012 adds no migration",
+    "golden_evaluation": {
+      "pass": 11,
+      "manual_review_required": 1,
+      "fail": 0,
+      "total": 12
+    },
+    "frontend_syntax_transpilation": "PASS \u2014 15 TypeScript/TSX files; zero syntax diagnostics; syntax-only, not a framework typecheck",
+    "frontend_npm_ci": "TIMED_OUT in authoring environment",
+    "frontend_lint_typecheck_build": "PENDING \u2014 must be run against Build 012 in participant environment",
+    "postgresql_rls_runtime": "PENDING \u2014 hosted non-superuser PostgreSQL CI run required",
+    "live_minio_aws": "NOT_TESTED \u2014 no live S3-compatible service available"
+  },
+  "known_limitations": [
+    "Knowledge Pack metadata/drafts remain filesystem-backed and process-local locking is not distributed",
+    "No normalized PostgreSQL pack metadata adapter or transactional pack manifest",
+    "No controlled PDF/DOCX source import or remote URI fetch",
+    "No malware scanning/quarantine",
+    "No complete guided forms for every knowledge record field",
+    "No advanced allowed-use, minimum-size, palette, clear-space and scope rules",
+    "No complete conflict detection or side-by-side version diff",
+    "Phase 03 PostgreSQL RLS and full frontend quality gates remain pending",
+    "Phase 04 remains open and is not signed off"
+  ],
+  "source_file_count": 233,
+  "included_sample_paths": [
+    ".editorconfig",
+    ".env.example",
+    ".gitattributes",
+    ".github/workflows/ci.yml",
+    ".gitignore",
+    ".nvmrc",
+    ".python-version",
+    "BUILD_001_MANIFEST.json",
+    "BUILD_004_MANIFEST.json",
+    "BUILD_005_MANIFEST.json",
+    "BUILD_006_MANIFEST.json",
+    "BUILD_007_MANIFEST.json"
+  ],
+  "excluded_from_archive": [
+    ".git",
+    ".env and local secret files",
+    "data/ including local database and uploaded originals",
+    ".venv",
+    "node_modules",
+    "build caches",
+    "Python bytecode"
+  ],
+  "disclosure": "Significant ChatGPT assistance used for coding, debugging and documentation. Participant must review, understand and accurately disclose work according to event rules."
+}

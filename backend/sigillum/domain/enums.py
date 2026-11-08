@@ -2,6 +2,7 @@ from enum import StrEnum
 
 class Role(StrEnum):
     CREATOR = "creator"
+    AGENCY = "agency"
     REVIEWER = "reviewer"
     BRAND_OWNER = "brand_owner"
     ADMINISTRATOR = "administrator"

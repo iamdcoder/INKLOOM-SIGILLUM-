@@ -186,3 +186,24 @@ def test_contrast_threshold_is_only_used_within_approved_channel_scope():
     assert service._contrast_threshold(SimpleNamespace(channel="social")) == 4.5
     assert service._contrast_threshold(SimpleNamespace(channel="print")) == 4.5
     assert service._contrast_threshold(SimpleNamespace(channel="direct_web")) is None
+
+
+def test_rejected_terminology_record_is_not_used_as_a_brand_rule(tmp_path):
+    import json
+    import shutil
+
+    fixture_root = Path(__file__).parents[2] / "fixtures" / "brand_pack" / "v1"
+    pack_root = tmp_path / "brand-pack"
+    shutil.copytree(fixture_root, pack_root)
+    terminology_path = pack_root / "terminology.json"
+    terminology = json.loads(terminology_path.read_text(encoding="utf-8"))
+    rejected = next(
+        item for item in terminology["prohibited_or_review_terms"]
+        if item["term_id"] == "TERM-101"
+    )
+    rejected["status"] = "rejected"
+    terminology_path.write_text(json.dumps(terminology), encoding="utf-8")
+
+    engine = VerificationEngine(BrandPack(pack_root))
+    findings = engine.analyse("Welcome to Orbita Air", BASE, WHEN)
+    assert not any(item["code"] == "TERMINOLOGY_VARIANT" for item in findings)

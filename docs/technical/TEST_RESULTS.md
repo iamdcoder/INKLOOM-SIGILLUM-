@@ -1,5 +1,26 @@
 # Verification record — current MVP
 
+**Latest update:** 2026-11-09, Build 010. Older entries below are retained as historical checkpoints; current results are summarised first.
+
+## Build 010 — database lifecycle
+
+| Check | Result | Notes |
+|---|---|---|
+| `python -m pytest` | **72 passed** | SQLite/local authoring environment; includes six database lifecycle tests |
+| Fresh SQLite Alembic migration | **Passed** | Upgrade empty database to head, verify all eight mapped tables, repeat upgrade at head |
+| Migration readiness | **Passed** | Pending schema is detected; migrated schema reports current revision `20261109_0002` |
+| `python scripts/verify_database.py` | **Passed** | Local SQLite schema at `20261109_0002`; eight required tables present |
+| SQLite FK enforcement | **Passed** | Invalid foreign-key insert raises `IntegrityError` |
+| PostgreSQL URL normalisation | **Passed** | `postgresql://` is normalised to the pinned `postgresql+psycopg` driver name |
+| Python compilation | **Passed** | `python -m compileall -q backend apps tests scripts` |
+| CI workflow YAML | **Parsed successfully** | Includes independent PostgreSQL 17 + pgvector service-backed job |
+| PostgreSQL server/driver test in authoring runtime | **Not run** | No local PostgreSQL server and no `psycopg` package in this authoring runtime; the configured hosted CI job must be observed passing |
+| Live MinIO/AWS | **Not run** | Build 009 S3 adapter still has offline fake-client coverage only |
+| Golden evaluation | **11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL** | Same 12 synthetic ORBITA cases; manual visual case remains a deliberate handoff |
+
+The PostgreSQL CI job is configured but not claimed as passed until GitHub Actions executes it. Frontend files were not changed in Build 010, so the participant-confirmed 2026-11-08 Windows lint/typecheck/build results remain the latest frontend evidence.
+
+
 **Recorded:** 2026-11-08. Participant-provided Windows frontend output and an independently executed clean local HTTP smoke run are included below. Re-run all commands on the final submission checkout and update this record if results differ.
 
 ## Automated results in the working environment

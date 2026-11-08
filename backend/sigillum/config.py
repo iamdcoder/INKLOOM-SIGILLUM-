@@ -9,14 +9,80 @@ class Settings(BaseSettings):
     app_name: str = "Inkloom Sigillum"
     api_v1_prefix: str = "/api/v1"
     database_url: str = "sqlite:///./data/sigillum.db"
+    database_pool_size: int = 5
+    database_max_overflow: int = 10
+    database_pool_timeout_seconds: int = 30
+    database_connect_timeout_seconds: int = 5
     storage_root: Path = Path("./data/private_uploads")
+    storage_backend: str = "local"
+    s3_endpoint_url: str | None = None
+    s3_bucket: str = "sigillum-private"
+    s3_region: str = "us-east-1"
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    s3_verify_ssl: bool = True
     brand_pack_path: Path = Path("./fixtures/brand_pack/v1")
     max_upload_bytes: int = 10 * 1024 * 1024
     jwt_secret_key: str = "local-development-secret-change-before-deployment"
     access_token_minutes: int = 480
+    file_grant_minutes: int = 5
     sigillum_demo_password: str = "ChangeMe-Local-Only"
     cors_origins: str = "http://localhost:3000"
     tesseract_cmd: str = "tesseract"
+
+    @field_validator("database_pool_size")
+    @classmethod
+    def valid_database_pool_size(cls, value: int) -> int:
+        if value < 1 or value > 50:
+            raise ValueError("DATABASE_POOL_SIZE must be between 1 and 50")
+        return value
+
+    @field_validator("database_max_overflow")
+    @classmethod
+    def valid_database_max_overflow(cls, value: int) -> int:
+        if value < 0 or value > 100:
+            raise ValueError("DATABASE_MAX_OVERFLOW must be between 0 and 100")
+        return value
+
+    @field_validator("database_pool_timeout_seconds", "database_connect_timeout_seconds")
+    @classmethod
+    def valid_database_timeouts(cls, value: int) -> int:
+        if value < 1 or value > 300:
+            raise ValueError("Database timeouts must be between 1 and 300 seconds")
+        return value
+
+    @field_validator("file_grant_minutes")
+    @classmethod
+    def valid_file_grant_minutes(cls, value: int) -> int:
+        if value < 1 or value > 15:
+            raise ValueError("FILE_GRANT_MINUTES must be between 1 and 15")
+        return value
+
+    @field_validator("storage_backend")
+    @classmethod
+    def valid_storage_backend(cls, value: str) -> str:
+        backend = value.strip().lower()
+        if backend not in {"local", "s3"}:
+            raise ValueError("STORAGE_BACKEND must be either 'local' or 's3'")
+        return backend
+
+    @field_validator("s3_endpoint_url")
+    @classmethod
+    def valid_s3_endpoint(cls, value: str | None) -> str | None:
+        if value is not None:
+            endpoint = value.strip()
+            if not endpoint.startswith(("http://", "https://")):
+                raise ValueError("S3_ENDPOINT_URL must start with http:// or https://")
+            return endpoint.rstrip("/")
+        return None
+
+    @field_validator("s3_bucket")
+    @classmethod
+    def valid_s3_bucket(cls, value: str) -> str:
+        bucket = value.strip()
+        if not bucket or len(bucket) > 63 or "/" in bucket or "\\" in bucket:
+            raise ValueError("S3_BUCKET must be a valid non-empty bucket name")
+        return bucket
 
     @field_validator("max_upload_bytes")
     @classmethod

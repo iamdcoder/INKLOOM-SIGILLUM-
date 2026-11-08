@@ -1,8 +1,8 @@
 # Event Integrity and Disclosure Checklist
 
-**Status: OPEN — general rules extracted; event-specific values still pending.** The supplied `Problemstatemnt(2).pdf` is authoritative for the rules it contains. The applicable organiser announcement remains authoritative for exact dates, exceptions and event-specific instructions.
+**Status: PARTICIPANT-CONFIRMED BUILD WINDOW OPEN; exact organiser timestamps and event-specific instructions still need documentary evidence.** The supplied `Problemstatemnt(2).pdf` is authoritative for the general rules it contains. The applicable organiser announcement remains authoritative for exact dates, exceptions and event-specific instructions.
 
-## Rules confirmed from the supplied PDF
+## General rules confirmed from the supplied PDF
 
 - [x] Development must occur during the official build window communicated for the event. Pre-window work will not count; substantial pre-window development may result in disqualification.
 - [x] Research, planning, interviews and discussion may occur before the window unless event-specific instructions state otherwise.
@@ -14,23 +14,27 @@
 - [x] Participants must respect software licences, intellectual property, data protection and user privacy.
 - [x] Individual contributions and all submitted links/evidence must be truthful.
 
-## Event-specific items still requiring organiser confirmation
+## Participant confirmation
+
+The participant stated on 2026-11-08 that the official build window had started and submission was in two days. Event-window implementation proceeded after that statement. The original organiser announcement and exact official timestamp were not attached, so retain them as separate evidence. The precise submission cutoff and official timezone must not be inferred.
+
+## Event-specific items still requiring documentary confirmation
 
 - [ ] Official build-window start and end, with timezone.
-- [ ] Whether the existing Phase 00 starter folder, fixture-generation helper and synthetic assets may be reused as disclosed pre-window material.
+- [ ] Confirmation that the disclosed pre-window planning archive, synthetic fixtures and helper script may be retained.
 - [ ] Any specific AI-assistance disclosure format or restrictions beyond the supplied general rules.
 - [ ] External API, hosted model, cloud storage and data-egress restrictions.
-- [ ] Submission deadline, repository visibility and judge-access instructions.
+- [ ] Exact submission deadline, repository visibility and judge-access instructions.
 - [ ] Any event-specific rules that override or add to the supplied PDF.
 
 ## Record of verification
 
-See `BUILD_WINDOW_LOG.csv` for exact values, source, verifier and follow-up action. Do not fill unknown fields by assumption.
+See `BUILD_WINDOW_LOG.csv` and `BUILD_ACTIVITY_LOG.csv` for participant statement, source, evidence and follow-up actions. Do not fill unknown fields by assumption.
 
 ## Pre-window material disclosure
 
-See `AI_AND_REUSE_DISCLOSURE.md`. The Phase 00 archive is AI-assisted planning/scaffolding and synthetic test material prepared on 2026-11-08 before the build window was confirmed. It includes a helper script. It is not a functional application. Any reuse must be disclosed and should be confirmed with organisers if there is doubt.
+See `AI_AND_REUSE_DISCLOSURE.md`. The Phase 00/01 planning archives are AI-assisted planning/scaffolding and synthetic demo material prepared before the participant confirmed that the window was open. Later functional API, application, verification and frontend work is separately recorded as AI-assisted event-window implementation. Do not present the pre-window material as event-window code.
 
-## Go / no-go rule
+## Build-integrity rule
 
-**NO-GO for application implementation** until the official build-window start/end and timezone are confirmed and the start time has arrived. Planning, requirements, design specifications and rule clarification may continue subject to organiser instructions.
+**Implementation may proceed based on the participant's confirmation that the window is open.** Preserve truthful activity and commit history, do not invent timestamps, and update the log if an organiser's official announcement clarifies start/end times or rules.

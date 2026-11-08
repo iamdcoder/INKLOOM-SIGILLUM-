@@ -1,33 +1,29 @@
-# Phase 01 — Exit Gate
+# Phase 01 — Experience architecture and visual design system
 
-**Phase objective:** define the complete interaction model and visual language before individual screens are implemented.
+**Phase objective:** define the interaction model and visual language before implementing each screen.
 
-## Required deliverables
+## Deliverables and current evidence
 
-- [x] Information architecture and global navigation documented.
-- [x] Canonical object path documented: submission -> content version -> review run -> finding -> evidence -> patch -> decision -> audit receipt.
-- [x] Creator, Agency, Reviewer, Brand Owner, Administrator and System Worker journeys documented, including handoffs and guardrails.
-- [x] Screen specifications drafted for Overview, Submissions, Review Workbench, Correction Studio, Reviewer Console, Brand Control Center, Governance/Impact Radar and Administration/Audit.
-- [x] Dark/light theme token proposal and semantic distinctions drafted.
-- [x] Shared component inventory created.
-- [x] UI state catalogue created.
-- [x] Accessibility design checklist created.
-- [x] UX acceptance criteria created.
-- [ ] Interactive/high-fidelity Review Workbench prototype produced and walked through.
-- [ ] Prototypes or detailed flows produced for all eight primary screens.
-- [ ] Token contrast measured and validated for both themes.
-- [ ] Keyboard/responsive walkthrough completed and findings recorded.
+- [x] Information architecture, global navigation and canonical object path documented.
+- [x] Creator, Agency, Reviewer, Brand Owner, Administrator and System Worker journeys documented.
+- [x] Eight primary screen specifications and shared-component inventory documented.
+- [x] Dark-first design tokens and semantic status conventions documented.
+- [x] Loading, empty, error, denied, stale-data, parser-warning, low-confidence OCR and provider-outage state catalogue documented.
+- [x] Accessibility design checklist and UX acceptance criteria documented.
+- [x] Next.js source implemented for login, overview, submissions/upload, review workbench, Brand Control Center snapshot and audit history.
+- [x] Workbench displays backend findings, exact quote/span where available, provenance, scope context, confidence/sufficiency, resolution and version-bound decision controls.
+- [ ] Full eight-screen prototype/implementation: Correction Studio, dedicated Reviewer Console, Governance/Impact Radar and Administration settings remain incomplete or embedded/limited.
+- [ ] Frontend dependency installation and `npm run build` verified in a clean environment.
+- [ ] Contrast tokens measured and keyboard/responsive walkthrough recorded.
 
 ## Acceptance criteria
 
-- [ ] Creators can explain submission and correction using the prototype.
-- [ ] Reviewers can explain evidence, uncertainty and decision using the prototype.
-- [ ] Brand Owners can explain Knowledge Pack governance using the prototype.
-- [ ] Every critical state has a presentation and actionable recovery/guardrail.
-- [ ] Accessibility review evidence is retained.
+- [x] A creator can use the implemented UI source to start a submission and inspect the returned review.
+- [x] A reviewer can inspect findings and record an authorised decision in the implemented workbench source.
+- [x] The Brand Control Center UI shows the current synthetic pack snapshot; full lifecycle governance is not implemented.
+- [ ] All critical states are validated in a running browser after frontend build.
+- [ ] Accessibility review and responsive walkthrough evidence retained.
 
-## Evidence to retain
+## Gate decision
 
-Screen prototypes, journey walkthroughs, token specification, shared-component checklist, state catalogue and accessibility review.
-
-**Gate status: IN PROGRESS.** Documentation is prepared; prototype and validation evidence remain outstanding. No frontend code is included in this phase pack.
+**Gate status: IN PROGRESS.** Product/UX documentation is complete and the core application screens are implemented in source. The frontend build has not been verified because dependency installation timed out in the build environment. Dedicated advanced screens and formal accessibility validation remain outstanding. Do not claim Phase 01 is fully closed.

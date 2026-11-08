@@ -1,0 +1,39 @@
+{
+  "project": "Inkloom Sigillum",
+  "team": "Devil Union",
+  "snapshot": "0.1.0-mvp-build-001",
+  "snapshot_date": "2026-11-08",
+  "build_window_provenance": {
+    "participant_confirmation_date": "2026-11-08",
+    "confirmation_time_local": "17:52 Asia/Kolkata",
+    "source": "participant message in project conversation",
+    "organiser_timestamp_verified": false,
+    "note": "This is not represented as the organiser-issued official start timestamp. Pre-window planning/scaffolding and fixture reuse are separately disclosed."
+  },
+  "verification": {
+    "backend_pytest": "27 passed",
+    "golden_evaluation": {
+      "automated_pass": 11,
+      "manual_review_required": 1,
+      "fail": 0,
+      "total": 12
+    },
+    "python_compileall": "passed",
+    "alembic_initial_migration": "passed",
+    "typescript_syntax_transpile": "14 TS/TSX files, 0 syntax diagnostics; not a full typecheck",
+    "api_http_smoke": "passed: readiness, demo login, TXT upload, deterministic CONTRADICTED finding, version history",
+    "frontend_install": "not completed in authoring environment due to npm registry DNS EAI_AGAIN",
+    "frontend_lint_typecheck_build": "not verified"
+  },
+  "active_runtime": {
+    "api": "FastAPI",
+    "web_source": "Next.js App Router / React / TypeScript",
+    "database": "SQLite development adapter",
+    "file_storage": "private local filesystem",
+    "verification": "narrow deterministic Python rules",
+    "ocr": "local Tesseract for PNG/JPG",
+    "hosted_llm": false,
+    "durable_worker": false
+  },
+  "disclosure": "See docs/governance/AI_AND_REUSE_DISCLOSURE.md and docs/governance/BUILD_ACTIVITY_LOG.csv. Significant AI assistance and pre-window planning/fixture reuse are disclosed."
+}

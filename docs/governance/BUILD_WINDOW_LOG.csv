@@ -1,10 +1,10 @@
 item,status,official_source,exact_value,verified_by,verified_at,action
-Official build-window start,PENDING,Organiser announcement,,,,Do not implement application code before confirmed start
-Official build-window end,PENDING,Organiser announcement,,,,Set freeze and submission controls
-Timezone,PENDING,Organiser announcement,,,,Record exact timezone
-Pre-window work boundary,PARTIALLY_EXTRACTED,Problemstatemnt(2).pdf,"Research, planning, interviews and discussion permitted unless event instructions state otherwise",Participant,2026-11-08,Check for event-specific instructions
-Reuse and boilerplate,PARTIALLY_EXTRACTED,Problemstatemnt(2).pdf,"Must be clearly disclosed",Participant,2026-11-08,Confirm treatment of the Phase 00 starter archive
-AI assistance,PARTIALLY_EXTRACTED,Problemstatemnt(2).pdf,"Permitted unless stated otherwise; significant tools and AI-generated components disclosed",Participant,2026-11-08,Confirm any event-specific disclosure form
-External services and data handling,PENDING,Organiser announcement,,,,Verify provider/API restrictions and privacy handling
-Submission deadline,PENDING,Organiser announcement,,,,Record exact date/time/timezone
-Repository visibility,PENDING,Organiser announcement,,,,Default expectation is judge-accessible unless alternative approved
+Official build-window start,PARTICIPANT_CONFIRMED_STARTED,Participant statement in project conversation,"Participant confirmed at 2026-11-08 17:52 Asia/Kolkata that the official build window had started; this is not an organiser-issued timestamp",Participant,2026-11-08T17:52:00+05:30,Retain organiser announcement or screenshot and record exact official timestamp if available
+Official build-window end,PENDING,Organiser announcement,"Exact end timestamp not supplied",Participant,2026-11-08,Record organiser's exact end timestamp and stop implementation at that time
+Timezone,UNVERIFIED,Organiser announcement,"Participant timezone is Asia/Kolkata; official event timezone not established",Participant,2026-11-08,Use the timezone stated by the organiser; do not infer it from participant locale
+Pre-window work boundary,VERIFIED_GENERAL_RULE,Problemstatemnt(2).pdf,"Research, planning, interviews and discussion permitted unless event instructions state otherwise",Participant,2026-11-08,Check if an event-specific instruction narrows the general rule
+Reuse and boilerplate,VERIFIED_GENERAL_RULE,Problemstatemnt(2).pdf,"Existing libraries/APIs/frameworks/datasets allowed under licences; templates, boilerplate and pre-created code must be disclosed",Participant,2026-11-08,Disclose the Phase 00 planning/scaffold archive and all other reused materials
+AI assistance,VERIFIED_GENERAL_RULE,Problemstatemnt(2).pdf,"AI, no-code and low-code tools permitted unless stated otherwise; significant tools and AI-generated components must be disclosed",Participant,2026-11-08,Update AI disclosure with all build-window assistance and final contribution
+External services and data handling,PARTIALLY_VERIFIED,Project runtime inventory,"No hosted LLM, embeddings, OCR provider or external data source is called by current MVP; local Tesseract is used",Participant,2026-11-08,Verify any service added later and update provider register before using confidential material
+Submission deadline,PARTICIPANT_REPORTED_APPROXIMATE,Participant statement in project conversation,"Submission stated as due in 2 days from 2026-11-08; exact date/time/timezone not supplied",Participant,2026-11-08,Record organiser's exact cutoff and submit before it
+Repository visibility,REQUIRES_CONFIRMATION,Problemstatemnt(2).pdf,"Round 2 expects public or judge-accessible repository unless organiser approves another review method",Participant,2026-11-08,Make repository judge-accessible and test links

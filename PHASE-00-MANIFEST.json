@@ -9,7 +9,10 @@
   "problem_statement": "Problemstatemnt(2).pdf",
   "synthetic_demo_brand": "ORBITA",
   "disclosure": "Pre-window AI-assisted planning/scaffold; disclose if retained or reused.",
-  "functional_application_code_present": false,
+  "functional_application_code_present": true,
   "pre_window_fixture_helper_code_present": true,
-  "pre_window_disclosure_required": true
+  "pre_window_disclosure_required": true,
+  "implementation_status": "MVP_VERTICAL_SLICE_IN_PROGRESS",
+  "build_window_opened": "2026-11-08",
+  "scope_note": "Functional backend vertical slice added during event build window; frontend and production hardening still in progress."
 }

@@ -1,0 +1,9 @@
+date,activity,materials_or_paths,evidence,status,notes
+2026-11-08,Participant confirmed official build window had started,Participant message,Conversation confirmation,RECORDED,Exact organiser timestamp/timezone not supplied
+2026-11-08,Implemented API foundation and authentication,apps/api; backend/sigillum/api; backend/sigillum/infrastructure/security.py,pytest integration tests,IMPLEMENTED,AI-assisted code generation and debugging; participant must review and understand
+2026-11-08,Implemented safe content extraction and immutable versions,backend/sigillum/modules/content; backend/sigillum/application/services,unit and integration tests,IMPLEMENTED,PDF DOCX TXT PNG JPG; scanned PDF OCR and embedded DOCX/PDF images remain out of scope
+2026-11-08,Implemented deterministic scoped claim and terminology checks,backend/sigillum/modules/verification; fixtures/brand_pack/v1,unit tests and golden evaluation,IMPLEMENTED_LIMITED_SCOPE,AI-assisted implementation; not general-purpose semantic verification
+2026-11-08,Implemented reviewer decisions and audit events,backend/sigillum/api/routes.py; backend/sigillum/infrastructure/database/models.py,integration tests,IMPLEMENTED_MVP,Decision binds exact hash; no production RLS
+2026-11-08,Implemented frontend screens and review workflow source,apps/web,source files inspected; dependency installation timed out,NOT_BUILD_VERIFIED,Do not claim npm build success until run locally
+2026-11-08,Expanded automated test suite,tests/unit; tests/integration,27 passing pytest tests,VERIFIED_IN_CURRENT_ENVIRONMENT,Local test environment only
+2026-11-08,Executed synthetic golden evaluation,scripts/evaluate_golden_cases.py; reports/golden_evaluation_latest.json,11 PASS 1 MANUAL_REVIEW_REQUIRED 0 FAIL,VERIFIED_IN_CURRENT_ENVIRONMENT,One visual logo/contrast case requires human review by design

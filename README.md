@@ -1,118 +1,189 @@
 # Inkloom Sigillum
 
-**Brand truth, verified before it ships.**
+**Evidence-first brand assurance. Brand truth, verified before it ships.**
 
-Inkloom Sigillum is an evidence-first, multimodal, human-governed brand assurance workspace. It checks submitted content against an approved, scoped and time-aware Brand Knowledge Pack. It explains what can be proven, abstains when evidence is insufficient, and leaves consequential decisions to authorised people.
+Sigillum is a pre-publication review workspace for checking text and static creative assets against an approved, scoped and time-aware Brand Knowledge Pack. It produces a source-linked finding ledger, exposes uncertainty, suggests constrained corrections and leaves final approval with an authorised human.
 
-> Project status: Phase 00 foundation pack. No application capability is represented as implemented yet.
+> **Build-window integrity:** this repository contains disclosed AI-assisted planning/scaffolding and synthetic fixture material prepared before the participant confirmed the official build window had opened, plus application code and tests developed after that confirmation. See `docs/governance/AI_AND_REUSE_DISCLOSURE.md`, `docs/governance/BUILD_WINDOW_LOG.csv` and `docs/governance/BUILD_ACTIVITY_LOG.csv`. The participant must verify the event's official start/end and submission cutoff, review and understand the code, and make accurate contribution disclosures.
 
-## Non-negotiable product invariants
+## Current implementation status
 
-1. **No proof, no SUPPORTED.** A decisive factual verdict requires applicable approved evidence or a deterministic approved rule.
-2. **Truth is scoped and time-aware.** Product, offer, geography, audience, channel, locale and intended publication time are part of the truth context.
-3. **Workers have no decision rights.** Specialist models propose typed candidates; deterministic policy code adjudicates; authorised humans decide.
-4. **Approval is version-bound.** A decision binds to the exact content hash/version, Knowledge Pack and policy versions, evidence snapshot, configuration, reviewer and timestamp.
-5. **Failure is never approval.** Parse failure, incomplete extraction, timeout, provider outage, cancellation and exhausted retries remain explicit non-approved states.
-6. **History is immutable.** A content edit creates a new version. A policy change creates a new governing context. Historical reviews and decisions are reconstructable.
-7. **Every finding has provenance.** Material findings identify the content location and the approved source record/version and applicable context.
+The current MVP has a real, locally runnable API and an implemented Next.js UI source tree. The API/integration suite has **27 passing tests** in the recorded development environment. The synthetic golden evaluation reports **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED and 0 FAIL**. These are test outcomes for the included cases only, not a general accuracy estimate or external certification.
 
-## Release discipline
+### Implemented in this MVP
 
-- **Core:** one controlled brand workspace; PDF, DOCX, TXT, PNG and JPG; Knowledge Pack; secure intake; evidence retrieval; claims, terminology, basic tone, OCR-visible text, basic asset and measurable palette/contrast checks; canonical findings; constrained corrections; human approval and audit.
-- **Advanced:** richer bitemporal replay, evaluated NLI signal, richer visual-region graph, Impact Radar, policy ambiguity analytics, signed audit checkpoints and bounded policy mutation testing.
-- **Stretch / post-event:** PPTX, HTML/email, video captions, CMS/design integrations, private inference, SSO and broader multilingual evaluation.
+- Demo authentication for creator, reviewer, brand owner and administrator roles.
+- Creator-owned submission access checks; reviewer/owner/admin review access within one synthetic demo workspace.
+- PDF, DOCX, TXT, PNG and JPG/JPEG intake with byte limits, signature/type checks and defensive parsing limits.
+- Text extraction from TXT, searchable PDF, DOCX paragraphs/tables; local Tesseract OCR for PNG/JPG with word boxes and extraction confidence.
+- Immutable source versions with SHA-256 content hashes and retained original files.
+- Deterministic savings-claim checks against configured approved facts, required scope fields, authority, and publication validity dates.
+- Conservative configured terminology, tone-pattern and untrusted-instruction-text checks.
+- A canonical finding ledger with distinct verdict, severity, confidence, extraction confidence, evidence sufficiency, reason code, source references, exact text span or explicit manual-review state.
+- Hash-bound TXT correction proposals that create a new content version and trigger a new review; revised PDFs, DOCX and images can be re-uploaded as new immutable versions.
+- Human reviewer decisions, mandatory reasons for reject/request-changes/override, role-gated override, approval blocking for unresolved blocking/review-required findings, and audit events.
+- Explicit visual review findings for logo identity and contrast on images, and for embedded visual content in PDF/DOCX.
+- Next.js screens for login, overview, submissions/upload, review workbench, Brand Control Center snapshot and audit history.
 
-Do not add advanced features until the Core upload -> evidence -> correction -> approval loop is stable.
+### Not implemented or not yet verified
 
-## Phase map
+- The current runtime is a **single synthetic demo workspace**. PostgreSQL row-level security, production multi-tenant isolation, enterprise identity, invitations and SSO are not implemented.
+- SQLite and private local filesystem storage are the default active adapters. `infra/docker-compose.yml` is a PostgreSQL/pgvector + MinIO scaffold; the current API does not yet use those services.
+- Reviews execute synchronously in the API process. The worker directory is a scaffold; durable leases, retry budgets, LangGraph checkpointing, resumable jobs and SSE progress are not active.
+- Retrieval is a static, local Brand Knowledge Pack lookup for supported deterministic rules. Hybrid lexical/vector retrieval, RRF and permission-aware pgvector search are not implemented.
+- Claim extraction is deliberately narrow (configured numeric savings patterns and selected quantified statements). It is not a general semantic claim verifier or legal compliance engine.
+- PNG/JPG OCR is local Tesseract. Scanned-PDF OCR and embedded-image OCR within PDF/DOCX are not implemented.
+- Logo identity matching, pixel-level palette analysis and standards-grade contrast measurement are not automated; the reviewer must inspect the original and record a reason.
+- Tone checks are configured phrase/pattern checks, not a calibrated model of brand voice.
+- Text patching is supported for TXT. Other formats require editing in their native application and uploading a new version.
+- A full standalone Correction Studio, Reviewer Console, Governance/Impact Radar and Administration configuration UI are not complete.
+- The frontend dependency installation timed out in the build environment. Its source is included, but `npm run build` has **not** been verified here.
+- No hosted LLM, embedding, OCR or external data provider is called by this build.
 
-| Phase | Outcome |
-|---|---|
-| 00 | Product contract, scope and build governance |
-| 01 | Experience architecture and visual design system |
-| 02 | Repository, runtime and engineering foundation |
-| 03 | Identity, workspace boundaries and permissions |
-| 04 | Brand Control Center and Knowledge Pack lifecycle |
-| 05 | Secure submission, storage and immutable content versions |
-| 06 | Document parsing, OCR and visual-region extraction |
-| 07 | Knowledge normalisation, temporal truth and indexing |
-| 08 | Hybrid evidence retrieval and source ranking |
-| 09 | Specialist analysis: claims, terminology, tone and visuals |
-| 10 | Deterministic adjudication and canonical finding ledger |
-| 11 | Durable orchestration, jobs and live progress |
-| 12 | Review Workbench, Correction Studio and revision loop |
-| 13 | Human approval, audit receipts and policy governance |
-| 14 | Impact Radar, governance analytics and policy mutation |
-| 15 | Evaluation, security hardening, release and demonstration |
+## Stack
 
-## Planned repository shape
+| Layer | Current MVP | Not to be confused with |
+|---|---|---|
+| Web | Next.js App Router, React, TypeScript, Lucide, custom CSS tokens | Production-ready verified frontend build |
+| API | FastAPI, Pydantic | Independent microservices |
+| Persistence | SQLAlchemy 2.x, local SQLite, Alembic initial migration | Active PostgreSQL/pgvector runtime |
+| File storage | Private local filesystem, SHA-256 metadata | Active S3/MinIO integration |
+| Extraction | pypdf, python-docx, Pillow, pytesseract/Tesseract | Full multimodal document understanding |
+| Verification | Pure deterministic Python checks | LLM truth adjudication |
+| Tests | pytest unit/integration + synthetic golden evaluator | Independent external validation |
 
-```text
-sigillum/
-├── apps/
-│   ├── web/                         # Next.js App Router experience
-│   ├── api/                         # FastAPI application wiring
-│   └── worker/                      # Durable worker / LangGraph entry point
-├── backend/
-│   └── sigillum/
-│       ├── domain/                  # Pure entities, value objects, rules, events
-│       ├── application/             # Use cases and ports
-│       ├── modules/
-│       │   ├── identity/            # Membership, RBAC, workspace scope
-│       │   ├── knowledge/            # Packs, facts, policies, terms, assets
-│       │   ├── content/              # Uploads, immutable versions, extraction
-│       │   ├── retrieval/            # Filters, lexical/vector search, RRF
-│       │   ├── verification/         # Claims, specialists, adjudicator, findings
-│       │   ├── workflow/             # Lifecycle, jobs, checkpoints
-│       │   ├── correction/           # Patches, diffs, regression
-│       │   └── governance/           # Approvals, audit, impact, policy insights
-│       ├── infrastructure/           # DB, storage, OCR, model adapters
-│       └── api/                      # Routers, dependencies, schemas
-├── packages/contracts/              # OpenAPI-derived TypeScript contracts
-├── migrations/                      # Alembic migrations
-├── tests/{unit,integration,contract,e2e,security,evaluation}/
-├── fixtures/{brand_pack,documents,images,golden_cases,mutations}/
-├── docs/{product,requirements,experience,architecture,governance,risks,runbooks,phase-gates}/
-├── infra/                           # Docker Compose and deployment config
-├── scripts/                         # Reproducible development scripts
-├── .env.example
-└── README.md
+## Requirements
+
+- Python 3.11+ (Python 3.13 recommended)
+- Node.js 20.9+ (Node 22 recommended) and npm
+- Tesseract OCR installed and available on `PATH` for PNG/JPG OCR
+- Windows PowerShell, macOS or Linux
+
+## Run locally — Windows PowerShell
+
+Open PowerShell in the repository root:
+
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+New-Item -ItemType Directory -Force data | Out-Null
+python -m alembic upgrade head
+uvicorn apps.api.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-## Phase 00 files
+API docs: <http://127.0.0.1:8000/docs>  
+Liveness: <http://127.0.0.1:8000/health/live>  
+Readiness: <http://127.0.0.1:8000/health/ready>
 
-- `docs/product/PRODUCT_CHARTER.md` — product contract, boundaries and invariants.
-- `docs/requirements/requirements.csv` — traceable requirements with phase, test and UI destination.
-- `docs/product/DEMO_SCENARIO.md` — synthetic ORBITA brand and judge-visible anchor scenario.
-- `fixtures/brand_pack/v1/` — version-one synthetic Brand Knowledge Pack seed data.
-- `fixtures/golden_cases/cases.json` — labelled evaluation cases, including time and evidence edge cases.
-- `docs/governance/PROVIDER_REGISTER.csv` — provider disclosure register; providers remain unselected until verified.
-- `docs/governance/EVENT_INTEGRITY_CHECKLIST.md` — organiser-rule verification checklist.
-- `docs/architecture/ADR-0001-modular-monolith.md` — initial architecture decision record.
-- `docs/risks/RISK_REGISTER.csv` — initial risk inventory.
-- `docs/phase-gates/PHASE-00-EXIT.md` — Phase 00 acceptance gate.
+The development API seeds four demo accounts on first startup. Their shared password is read from `SIGILLUM_DEMO_PASSWORD` in `.env` and defaults to `ChangeMe-Local-Only` for local use only.
 
-## Source of truth
+| Role | Email |
+|---|---|
+| Creator | `creator@orbita.demo` |
+| Reviewer | `reviewer@orbita.demo` |
+| Brand Owner | `owner@orbita.demo` |
+| Administrator | `admin@orbita.demo` |
 
-`SIGILLUM_Plan` is the master implementation blueprint. The original Devil Union proposal is supporting context. If an implementation choice conflicts with the master plan's invariants or scope, stop and record an ADR before proceeding.
+**Never use these accounts or the default password for a public deployment or real confidential material.** Change all secrets and passwords before sharing a running instance. The local demo is not a production security configuration.
 
+## Run the web app
 
-## Official event rules and disclosure
+In a second terminal:
 
-- `docs/governance/OFFICIAL_RULES_EXTRACT.md` — rule summary from the supplied Problem Statement PDF.
-- `docs/governance/BUILD_WINDOW_LOG.csv` — event-specific values still requiring organiser confirmation.
-- `docs/governance/AI_AND_REUSE_DISCLOSURE.md` — disclosure of pre-window scaffold, synthetic assets, code helper and AI assistance.
-- `docs/product/ROUND_SCORING_STRATEGY.md` — evidence strategy aligned to the supplied Round 2 and Round 3 judging rubrics.
+```powershell
+cd apps\web
+if (!(Test-Path .env.local)) { Copy-Item .env.local.example .env.local }
+npm install
+npm run dev
+```
 
-## Phase 01 experience documents
+Open <http://localhost:3000>. The API URL defaults to `http://127.0.0.1:8000/api/v1`; configure `NEXT_PUBLIC_API_URL` in `apps/web/.env.local` if needed.
 
-- `docs/experience/INFORMATION_ARCHITECTURE.md` — application shell, navigation, object model and access boundaries.
-- `docs/experience/ROLE_JOURNEYS.md` — creator, agency, reviewer, owner, administrator and worker journeys.
-- `docs/experience/SCREEN_SPECIFICATIONS.md` — eight primary screen contracts.
-- `docs/experience/DESIGN_SYSTEM.md` — initial dark/light tokens and semantic state definitions.
-- `docs/experience/COMPONENT_CATALOG.md` — shared component inventory.
-- `docs/experience/STATE_CATALOG.md` — loading, empty, failure, stale and approval state catalogue.
-- `docs/experience/ACCESSIBILITY_CHECKLIST.md` — validation checklist; no conformance claim yet.
-- `docs/experience/UX_ACCEPTANCE.md` — user-visible acceptance criteria.
+Build verification:
 
-No Next.js, FastAPI, database, worker or adjudication implementation is included. The Phase 00 folder scaffold and fixture helper in the original starter are pre-window materials and must be accurately disclosed if reused.
+```powershell
+npm run build
+```
+
+Do not report a successful frontend build until this command completes successfully in the target environment.
+
+## Tests and evaluation
+
+From the repository root with the Python environment active:
+
+```powershell
+pytest
+python scripts/evaluate_golden_cases.py
+python -m compileall -q backend apps tests scripts
+```
+
+The golden report is written to `reports/golden_evaluation_latest.json`. The current synthetic set is designed to exercise the anchor 40%-versus-28% claim, a supported exact claim, expired/future facts, conflicting sources, missing evidence, unsupported quantified statements, instruction-like text, terminology, tone, low OCR confidence and visual manual review.
+
+## Primary judge demo
+
+See `docs/demo/DEMO_RUNBOOK.md`. The strongest flow is:
+
+1. Log in as creator and upload `fixtures/documents/claim_40_percent.txt` with `direct_web`, `IN`, `en-IN`, `consumer`, `OFFER-ORBITA-OCT-NOV-2026` and a publication date in the approved validity window.
+2. Inspect the `CONTRADICTED` claim, exact content span, approved 28% evidence and scope/validity metadata.
+3. Apply the constrained TXT patch. Confirm version 2 has a different SHA-256 and a new review run.
+4. Sign in as reviewer. Inspect all remaining findings and record a reason for each manual review item.
+5. Approve only the latest exact content version. Show the bound hash and audit trail.
+6. Upload `fixtures/images/social_supported_clean.png` to demonstrate OCR and the explicit human visual/contrast gates.
+
+## Product invariants
+
+1. No applicable approved proof means `UNVERIFIABLE`, not `SUPPORTED`.
+2. Truth is scoped by offer, geography, channel, locale, audience and intended publication time.
+3. Analysis proposes; deterministic policy code adjudicates configured rules; authorised humans decide.
+4. Approval binds to the exact content hash and review context.
+5. A content edit creates a new immutable version; historical versions and reviews remain inspectable.
+6. Parse failure and low-confidence OCR never imply approval.
+7. Uploaded content is untrusted data, never an instruction to execute tools or change permissions.
+8. An honest manual-review state is preferable to pretending a visual check was performed.
+
+## Repository map
+
+```text
+apps/
+  api/                 FastAPI application entrypoint
+  web/                 Next.js App Router experience
+  worker/              Worker entrypoint scaffold (not active)
+backend/sigillum/
+  api/                 Routers, dependencies and request/response schemas
+  application/         Review orchestration service
+  domain/              Domain enums and boundaries
+  infrastructure/      SQLAlchemy, security and storage boundary
+  modules/
+    content/           Safe file extraction and OCR
+    knowledge/         Synthetic Brand Knowledge Pack reader
+    verification/      Deterministic claim/terminology/tone checks
+    identity/          Identity module boundary (future expansion)
+    retrieval/         Retrieval module boundary (future expansion)
+    workflow/          Durable workflow module boundary (future expansion)
+    correction/        Correction module boundary (future expansion)
+    governance/        Governance module boundary (future expansion)
+fixtures/              ORBITA pack, document/image fixtures and golden cases
+docs/                  Product, UX, technical, governance, runbook and phase-gate records
+migrations/            Alembic migration history
+infra/                 Compose scaffold for Postgres/pgvector and MinIO
+packages/contracts/    Shared API contract boundary (future generated client)
+reports/               Reproducible evaluation output
+scripts/               Startup, test, fixture and evaluation scripts
+tests/                 Unit and integration suite
+```
+
+## Event contribution and provenance
+
+Review `docs/governance/AI_AND_REUSE_DISCLOSURE.md` before submission. The supplied problem statement requires a functional product/MVP, judge-accessible source, demo/deployment, architecture and technology disclosures, reasonable testing evidence and accurate personal contribution. It also requires disclosure of reused code/assets/templates, external services and significant AI assistance. The repository keeps a record rather than claiming that planning/scaffold files were created during the official build window.
+
+## Latest engineering verification
+
+- Backend test suite: **27 passed** in the recorded local run.
+- Synthetic golden corpus: **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED, 0 FAIL** across 12 cases. The manual case is intentional: logo identity and contrast are not auto-certified.
+- Each review now stores the full Brand Knowledge Pack snapshot, its SHA-256 fingerprint and the deterministic ruleset version. The API exposes a version-history timeline with hashes and decisions.
+- TypeScript/TSX syntax transpilation: **14 source files, 0 syntax diagnostics**. This is not a full typecheck. The frontend dependency install/build has **not yet been verified** in this authoring environment because DNS resolution to `registry.npmjs.org` failed. Run frontend install, lint, typecheck and production build on the participant machine before submission; commit the generated `package-lock.json`.
+
+See `docs/phase-gates/PHASE-02-STATUS.md` for the remaining gate items and exact commands.

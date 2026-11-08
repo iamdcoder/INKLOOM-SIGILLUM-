@@ -27,7 +27,7 @@
   ],
   "disallowed_patterns": [
     {
-      "pattern": "worlds best",
+      "pattern": "world's best",
       "reason": "Unsubstantiated superlative",
       "severity": "review_required"
     },

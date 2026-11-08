@@ -14,7 +14,8 @@
         "geography": "IN",
         "channel": "direct_web",
         "locale": "en-IN",
-        "publication_at": "2026-11-08T12:00:00+05:30"
+        "publication_at": "2026-11-08T12:00:00+05:30",
+        "audience": "consumer"
       },
       "expected": "CONTRADICTED",
       "evidence": [
@@ -36,7 +37,8 @@
         "geography": "IN",
         "channel": "direct_web",
         "locale": "en-IN",
-        "publication_at": "2026-11-08T12:00:00+05:30"
+        "publication_at": "2026-11-08T12:00:00+05:30",
+        "audience": "consumer"
       },
       "expected": "SUPPORTED",
       "evidence": [
@@ -57,7 +59,8 @@
         "geography": "IN",
         "channel": "direct_web",
         "locale": "en-IN",
-        "publication_at": "2026-11-08T12:00:00+05:30"
+        "publication_at": "2026-11-08T12:00:00+05:30",
+        "audience": "consumer"
       },
       "expected": "STALE_OR_UNVERIFIABLE",
       "evidence": [
@@ -78,7 +81,8 @@
         "geography": "IN",
         "channel": "direct_web",
         "locale": "en-IN",
-        "publication_at": "2026-11-08T12:00:00+05:30"
+        "publication_at": "2026-11-08T12:00:00+05:30",
+        "audience": "consumer"
       },
       "expected": "UNVERIFIABLE_OR_NOT_YET_VALID",
       "evidence": [
@@ -99,7 +103,8 @@
         "geography": "IN",
         "channel": "social",
         "locale": "en-IN",
-        "publication_at": "2026-11-08T12:00:00+05:30"
+        "publication_at": "2026-11-08T12:00:00+05:30",
+        "audience": "consumer"
       },
       "expected": "CONFLICTING",
       "evidence": [

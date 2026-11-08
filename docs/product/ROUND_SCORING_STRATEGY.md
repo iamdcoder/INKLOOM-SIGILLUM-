@@ -7,8 +7,8 @@
 
 | Judging criterion | Points | Product evidence we must produce |
 |---|---:|---|
-| Core workflow runs end to end | 30 | Live demonstration: upload supported content -> parse/extract -> resolve approved pack -> retrieve evidence -> analyse -> deterministic findings -> correction -> new immutable version -> re-check -> authorised decision -> audit receipt |
-| Technical depth and reliability | 25 | Architecture walkthrough, migration-from-zero proof, automated tests, failure-state evidence, hash/provenance verification, permission tests and reproducible deployment |
+| Core workflow runs end to end | 30 | Live demonstration: upload supported content -> parse/OCR -> apply the loaded synthetic Brand Knowledge Pack -> deterministic findings with source references -> correction/new immutable version -> re-check -> human visual review where required -> authorised decision -> audit events |
+| Technical depth and reliability | 25 | Architecture walkthrough, migration-from-zero proof, 24 automated tests, golden evaluation, hash/provenance verification, creator-ownership test and honest failure/manual-review states; production deployment remains future work |
 | Progress against the plan | 20 | Phase-gate register mapped to requirement IDs, tests, commits and demo evidence; explicit deferrals and limitations |
 | The three improvements you named | 15 | Separate proof for Proof Ledger/abstention, Scope-Time Truth Resolver and Pixel-to-Claim continuity |
 | Usability so far | 10 | Creator/reviewer task walkthrough, responsive states, keyboard path, concise evidence explanation and visible recovery states |

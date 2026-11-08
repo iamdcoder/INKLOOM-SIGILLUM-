@@ -1,0 +1,36 @@
+{
+  "build": "005",
+  "project": "Inkloom Sigillum",
+  "date": "2026-11-08",
+  "scope": "Review Workbench triage and provenance UI enhancement",
+  "changes": [
+    {
+      "path": "apps/web/app/reviews/[id]/page.tsx",
+      "purpose": "Finding search, filters, sorting, exact span navigation, evidence and region detail rendering"
+    },
+    {
+      "path": "apps/web/app/globals.css",
+      "purpose": "Responsive styles for finding filters, active spans, evidence scope and region details"
+    },
+    {
+      "path": "docs/technical/BUILD_005_REVIEW_WORKBENCH.md",
+      "purpose": "Feature documentation, limitations and manual acceptance checklist"
+    },
+    {
+      "path": "docs/phase-gates/PHASE-02-STATUS.md",
+      "purpose": "Record implementation while keeping full phase gate open"
+    }
+  ],
+  "invariants_preserved": [
+    "No verification engine or adjudication logic changed",
+    "No API contract or database schema changed",
+    "No approval or override semantics changed",
+    "No missing content coordinates are fabricated"
+  ],
+  "validation": {
+    "typescript_syntax_transpile_diagnostics": 0,
+    "eslint": "not run in build environment",
+    "typecheck": "not run in build environment",
+    "next_build": "not run in build environment"
+  }
+}

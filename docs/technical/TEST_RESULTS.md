@@ -43,3 +43,15 @@ npm run build
 ```
 
 The participant has supplied successful output for all three frontend commands. Preserve the corresponding `package-lock.json` from the participant checkout.
+
+
+## Build 006 visual evidence verification
+
+- Backend suite: **33 passed** (unit + integration).
+- Image extraction contract: image metadata, decoded-pixel SHA-256, palette inventory, OCR line IDs, polygon coordinates and normalized bounding boxes are tested.
+- Contrast estimator: low-contrast candidate (`FAIL`) and missing approved threshold (`UNMEASURABLE`) are covered by deterministic tests.
+- Scope guard: structured threshold is applied only to channels covered by the approved synthetic policy.
+- Integration: image upload returns region geometry through the existing review API; out-of-scope contrast policy does not create a contrast finding.
+- Frontend: the changed TSX file passes TypeScript syntax transpilation. Full ESLint, project typecheck and Next.js production build must be rerun on the developer machine because this packaging environment does not contain the project's installed npm dependencies.
+
+The image contrast value is a local segmentation estimate, not a complete accessibility audit. Human confirmation remains mandatory.

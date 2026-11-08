@@ -190,3 +190,12 @@ Review `docs/governance/AI_AND_REUSE_DISCLOSURE.md` before submission. The suppl
 - Live API vertical-slice smoke: **8 checks passed** against a clean local database: readiness, authentication, upload, evidence-linked contradiction, approval blocking, hash-bound correction, immutable version history, corrected-version approval and audit events. See `docs/technical/LIVE_VERTICAL_SLICE_SMOKE.md`.
 
 See `docs/phase-gates/PHASE-02-STATUS.md` for the remaining gate items and exact commands.
+
+
+## Build 006 — Visual Evidence Intelligence
+
+Build 006 adds source-mapped logical text regions and a first image-region inspection path. PNG/JPG extraction now stores image dimensions, EXIF orientation, decoded-pixel fingerprint, descriptive dominant-colour samples, line-level OCR regions, polygon geometry, normalized bounding boxes, word boxes, coordinate-system metadata, Tesseract engine/version, a bounded OCR timeout and OCR confidence. The Review Workbench overlays the OCR polygons on the preserved original image and links selectable regions to related findings.
+
+For social/print submissions, an approved in-scope Brand Knowledge Pack policy can provide a structured minimum contrast ratio. Sigillum performs a conservative local pixel estimate around an OCR line and records `PASS`, `FAIL` or `UNMEASURABLE` with sampled colours, method and limitations. A measured failure or an in-scope unmeasurable region routes to human review; it never automatically blocks or approves on its own. Palette output is descriptive only. Logo identity remains manual confirmation.
+
+TXT lines and DOCX paragraphs/table rows now retain logical character offsets. PDFs retain page dimensions and page text offsets, but this build does not claim rendered PDF text polygons or scanned-PDF OCR. These remaining items are tracked in `docs/phase-gates/PHASE-06-STATUS.md`.

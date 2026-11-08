@@ -117,3 +117,72 @@ def test_brand_pack_fingerprint_is_stable_and_covers_snapshot():
     assert first == second
     snapshot = PACK.snapshot()
     assert set(snapshot) == {"brand", "facts", "policies", "terminology", "voice", "assets"}
+
+
+def test_image_extraction_preserves_metadata_and_polygon_regions():
+    from sigillum.modules.content.extraction import extract
+
+    image_path = Path(__file__).parents[2] / "fixtures" / "images" / "social_supported_clean.png"
+    extracted = extract(image_path.name, image_path.read_bytes(), contrast_threshold=4.5)
+    metadata = next(region for region in extracted.regions if region["kind"] == "image_metadata")
+    assert metadata["width"] > 0 and metadata["height"] > 0
+    assert metadata["coordinate_system"] == "image-pixels-top-left-origin"
+    assert metadata["ocr_engine"] == "Tesseract"
+    assert "ocr_engine_version" in metadata
+    assert len(metadata["pixel_sha256"]) == 64
+    assert metadata["palette"]
+    for region in (item for item in extracted.regions if item["kind"] == "ocr_line"):
+        assert region["region_id"].startswith("ocr-line-")
+        assert len(region["polygon"]) == 4
+        assert set(region["normalised_bbox"]) == {"x", "y", "width", "height"}
+        assert region["coordinate_system"] == "image-pixels-top-left-origin"
+        assert region["start"] < region["end"]
+
+
+def test_local_contrast_measurement_flags_low_contrast_as_candidate():
+    from PIL import Image, ImageDraw
+    from sigillum.modules.content.extraction import measure_region_contrast
+
+    image = Image.new("RGB", (220, 70), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((24, 23), "Fine print", fill=(190, 190, 190))
+    result = measure_region_contrast(image, {"x": 20, "y": 18, "width": 90, "height": 28}, 4.5, 0.95)
+    assert result["status"] == "FAIL"
+    assert result["ratio"] < 4.5
+    assert result["measurement_confidence"] >= 0.70
+    assert "limitation" in result
+
+
+def test_contrast_is_unmeasurable_without_an_approved_threshold():
+    from PIL import Image
+    from sigillum.modules.content.extraction import measure_region_contrast
+
+    image = Image.new("RGB", (80, 40), "white")
+    result = measure_region_contrast(image, {"x": 10, "y": 10, "width": 50, "height": 18}, None, 0.99)
+    assert result["status"] == "UNMEASURABLE"
+    assert result["reason"] == "NO_APPROVED_THRESHOLD"
+
+
+def test_txt_and_docx_extractors_create_logical_source_regions():
+    from sigillum.modules.content.extraction import extract
+
+    txt = extract("lines.txt", b"First line\nSecond line\n")
+    assert [region["kind"] for region in txt.regions] == ["txt_line", "txt_line"]
+    assert txt.regions[0]["start"] == 0
+    assert txt.regions[1]["start"] == len("First line\n")
+
+    docx_path = Path(__file__).parents[2] / "fixtures" / "documents" / "claim_40_percent.docx"
+    docx = extract(docx_path.name, docx_path.read_bytes())
+    assert any(region["kind"] == "docx_paragraph" for region in docx.regions)
+    for region in docx.regions:
+        assert region["coordinates_available"] is False
+
+
+def test_contrast_threshold_is_only_used_within_approved_channel_scope():
+    from types import SimpleNamespace
+    from sigillum.application.services.review_service import ReviewService
+
+    service = ReviewService(db=None, pack=PACK, storage_root=Path("."))
+    assert service._contrast_threshold(SimpleNamespace(channel="social")) == 4.5
+    assert service._contrast_threshold(SimpleNamespace(channel="print")) == 4.5
+    assert service._contrast_threshold(SimpleNamespace(channel="direct_web")) is None

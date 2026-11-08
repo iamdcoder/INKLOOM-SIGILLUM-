@@ -14,6 +14,7 @@
 - [x] Participant Windows frontend install, lint, typecheck and production build passed on 2026-11-08; retain the generated `apps/web/package-lock.json`.
 - [x] Live HTTP vertical-slice smoke executed against a clean local API/database: 8 checks passed.
 - [x] Next.js App Router source for login, overview, submissions, upload, review workbench, Brand Control Center and audit history.
+- [x] Review Workbench finding search, severity/category/verdict/status filters, risk-first sorting, exact text-span navigation, and richer available evidence/region provenance display (Build 005; local lint/typecheck/build re-verification pending).
 - [x] Python unit/integration suite: 27 passing tests in the current local run.
 - [x] Synthetic golden evaluation: 11 automated PASS, 1 explicit MANUAL_REVIEW_REQUIRED, 0 FAIL, 12 total.
 

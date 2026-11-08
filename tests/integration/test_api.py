@@ -301,7 +301,9 @@ def test_image_review_requires_visual_inspection_before_human_approval(client):
     assert payload["content_version"]["extraction_confidence"] >= 0.75
     codes = {finding["code"] for finding in payload["findings"]}
     assert "VISUAL_ASSET_MANUAL_REVIEW" in codes
-    assert "CONTRAST_MANUAL_REVIEW" in codes
+    # This direct_web submission is outside the social/print contrast policy scope.
+    # The image-region metadata may say UNMEASURABLE, but no out-of-scope finding is created.
+    assert "VISUAL_CONTRAST_REVIEW" not in codes
 
     reviewer = token(client, "reviewer@orbita.demo")
     reviewer_headers = {"Authorization": f"Bearer {reviewer}"}
@@ -409,3 +411,35 @@ def test_creator_cannot_read_another_creators_version_history(client):
         headers={"Authorization": f"Bearer {creator_two}"},
     )
     assert denied.status_code == 404
+
+
+def test_image_submission_returns_polygon_regions_and_measurement_status(client):
+    from pathlib import Path
+
+    creator = token(client)
+    headers = {"Authorization": f"Bearer {creator}"}
+    image_path = Path(__file__).parents[2] / "fixtures" / "images" / "social_supported_clean.png"
+    response = client.post(
+        "/api/v1/submissions",
+        headers=headers,
+        data={
+            "title": "Visual evidence geometry check",
+            "channel": "social",
+            "locale": "en-IN",
+            "geography": "IN",
+            "audience": "consumer",
+            "offer_id": "OFFER-ORBITA-OCT-NOV-2026",
+            "publication_at": "2026-11-08T12:00:00+05:30",
+        },
+        files={"file": (image_path.name, image_path.read_bytes(), "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    version = response.json()["content_version"]
+    metadata = next(region for region in version["regions"] if region["kind"] == "image_metadata")
+    assert metadata["width"] > 0 and metadata["height"] > 0
+    line_regions = [region for region in version["regions"] if region["kind"] == "ocr_line"]
+    for region in line_regions:
+        assert region["polygon"]
+        assert region["normalised_bbox"]
+        assert region["contrast"]["status"] in {"PASS", "FAIL", "UNMEASURABLE"}
+    assert any(finding["code"] == "VISUAL_ASSET_MANUAL_REVIEW" for finding in response.json()["findings"])

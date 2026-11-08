@@ -12,8 +12,22 @@ class ReviewService:
     def __init__(self, db: Session, pack: BrandPack, storage_root: Path):
         self.db=db; self.pack=pack; self.storage_root=storage_root; self.engine=VerificationEngine(pack)
 
+    def _contrast_threshold(self, submission: models.Submission) -> float | None:
+        """Resolve only an approved, in-scope threshold from the current demo pack."""
+        for policy in self.pack.policies:
+            if policy.get("policy_id") != "POL-VIS-001" or policy.get("status") != "approved":
+                continue
+            scope = policy.get("scope") or {}
+            allowed_channels = scope.get("channel")
+            if allowed_channels and submission.channel not in allowed_channels:
+                continue
+            value = policy.get("minimum_contrast_ratio")
+            if isinstance(value, (int, float)) and value > 1:
+                return float(value)
+        return None
+
     def create_version(self, submission: models.Submission, filename: str, mime_type: str, data: bytes, actor: models.User):
-        result=extract(filename, data)
+        result=extract(filename, data, contrast_threshold=self._contrast_threshold(submission))
         digest=sha256(data).hexdigest()
         version_number=len(submission.versions)+1
         storage_key=f"{submission.id}/{version_number}/{uuid4().hex}{Path(filename).suffix.lower()}"
@@ -24,6 +38,68 @@ class ReviewService:
         self.db.add(version); self.db.flush()
         submission.current_version_id=version.id
         return version
+
+    def _contrast_findings(self, version: models.ContentVersion) -> list[dict]:
+        findings: list[dict] = []
+        for region in version.regions or []:
+            if region.get("kind") != "ocr_line":
+                continue
+            contrast = region.get("contrast") or {}
+            status = contrast.get("status")
+            # No applicable approved threshold means the system has no policy basis
+            # for raising a contrast issue. Keep the UNMEASURABLE metadata visible.
+            if status not in {"FAIL", "UNMEASURABLE"} or contrast.get("reason") == "NO_APPROVED_THRESHOLD":
+                continue
+
+            ratio = contrast.get("ratio")
+            threshold = contrast.get("threshold")
+            failed = status == "FAIL"
+            if failed:
+                title = "Text may fall below the approved contrast threshold"
+                explanation = (
+                    f"A local pixel estimate measured {ratio}:1 against the approved {threshold}:1 threshold "
+                    "for this OCR line. This is a candidate measurement, not a full accessibility certification; "
+                    "inspect the original creative before deciding."
+                )
+                reason_code = "LOCAL_CONTRAST_BELOW_APPROVED_THRESHOLD"
+            else:
+                title = "Text contrast could not be measured reliably"
+                explanation = (
+                    "The local foreground/background segmentation was not reliable enough to report a contrast "
+                    "ratio. This is not a pass. Inspect the original creative manually."
+                )
+                reason_code = str(contrast.get("reason") or "CONTRAST_UNMEASURABLE")
+
+            evidence = [{
+                "policy_id": "POL-VIS-001",
+                "policy_source": "Approved Brand Knowledge Pack contrast policy",
+                "threshold": threshold,
+                "measured_ratio": ratio,
+                "foreground_color": contrast.get("foreground_color"),
+                "background_color": contrast.get("background_color"),
+                "measurement_method": contrast.get("method"),
+                "measurement_confidence": contrast.get("measurement_confidence"),
+                "limitation": contrast.get("limitation") or "No reliable local measurement was available.",
+            }]
+            findings.append({
+                "code": "VISUAL_CONTRAST_REVIEW",
+                "category": "accessibility",
+                "severity": "review_required",
+                "verdict": "NEEDS_MANUAL_REVIEW",
+                "title": title,
+                "explanation": explanation,
+                "reason_code": reason_code,
+                "evidence_sufficiency": "INSUFFICIENT",
+                "confidence": float(contrast.get("measurement_confidence") or 0.0),
+                "extraction_confidence": float(region.get("confidence") or version.extraction_confidence),
+                "content_start": region.get("start"),
+                "content_end": region.get("end"),
+                "content_quote": region.get("text"),
+                "region": region,
+                "evidence": evidence,
+                "suggestions": [],
+            })
+        return findings
 
     def run_review(self, submission: models.Submission, version: models.ContentVersion):
         review=models.ReviewRun(
@@ -41,8 +117,8 @@ class ReviewService:
         publication_at = datetime.fromisoformat(submission.publication_at.replace("Z", "+00:00"))
         findings=self.engine.analyse(version.extracted_text,context,publication_at,version.extraction_confidence,version.regions)
         if version.mime_type in {"image/png", "image/jpeg"}:
-            # Honest manual-review gates: OCR is available, but brand-mark identity and
-            # standards-grade contrast measurement are not automated in this build.
+            # Logo identity remains human-confirmed. Contrast estimates are candidate
+            # measurements and remain review-required rather than automatic approval.
             findings.extend([
                 {
                     "code": "VISUAL_ASSET_MANUAL_REVIEW",
@@ -62,24 +138,7 @@ class ReviewService:
                     "evidence": [{"asset_id": asset.get("asset_id"), "name": asset.get("name"), "status": asset.get("status")} for asset in self.pack.assets.get("approved_assets", []) if asset.get("kind") == "logo"],
                     "suggestions": [],
                 },
-                {
-                    "code": "CONTRAST_MANUAL_REVIEW",
-                    "category": "accessibility",
-                    "severity": "review_required",
-                    "verdict": "NEEDS_MANUAL_REVIEW",
-                    "title": "Text contrast requires visual measurement",
-                    "explanation": "OCR regions are available, but this build does not calculate a standards-grade contrast ratio for each text/background pair. Measure important text and disclaimers in the original creative before approval.",
-                    "reason_code": "CONTRAST_MEASUREMENT_NOT_AUTOMATED",
-                    "evidence_sufficiency": "INSUFFICIENT",
-                    "confidence": 0.0,
-                    "extraction_confidence": version.extraction_confidence,
-                    "content_start": None,
-                    "content_end": None,
-                    "content_quote": None,
-                    "region": None,
-                    "evidence": [],
-                    "suggestions": [],
-                },
+                *self._contrast_findings(version),
             ])
         elif version.mime_type in {
             "application/pdf",

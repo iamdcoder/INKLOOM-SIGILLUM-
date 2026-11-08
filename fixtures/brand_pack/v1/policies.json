@@ -54,7 +54,11 @@
         ]
       },
       "valid_from": "2026-10-01T00:00:00+05:30",
-      "valid_until": null
+      "valid_until": null,
+      "minimum_contrast_ratio": 4.5,
+      "text_class": "normal_text",
+      "measurement_scope": "ocr_line_local_estimate",
+      "manual_confirmation_required": true
     },
     {
       "policy_id": "POL-ASSET-001",

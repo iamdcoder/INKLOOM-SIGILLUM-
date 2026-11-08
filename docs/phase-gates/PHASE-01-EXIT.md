@@ -13,7 +13,7 @@
 - [x] Next.js source implemented for login, overview, submissions/upload, review workbench, Brand Control Center snapshot and audit history.
 - [x] Workbench displays backend findings, exact quote/span where available, provenance, scope context, confidence/sufficiency, resolution and version-bound decision controls.
 - [ ] Full eight-screen prototype/implementation: Correction Studio, dedicated Reviewer Console, Governance/Impact Radar and Administration settings remain incomplete or embedded/limited.
-- [ ] Frontend dependency installation and `npm run build` verified in a clean environment.
+- [x] Participant Windows frontend dependency installation, lint, typecheck and production build verified on 2026-11-08; preserve the generated package lockfile.
 - [ ] Contrast tokens measured and keyboard/responsive walkthrough recorded.
 
 ## Acceptance criteria
@@ -26,4 +26,4 @@
 
 ## Gate decision
 
-**Gate status: IN PROGRESS.** Product/UX documentation is complete and the core application screens are implemented in source. The frontend build has not been verified because dependency installation timed out in the build environment. Dedicated advanced screens and formal accessibility validation remain outstanding. Do not claim Phase 01 is fully closed.
+**Gate status: IN PROGRESS.** Product/UX documentation is complete and the core application screens are implemented in source. The core frontend production build has been verified on the participant Windows machine. Dedicated advanced screens, full browser-state walkthrough, formal accessibility validation and responsive walkthrough remain outstanding. Do not claim Phase 01 is fully closed.

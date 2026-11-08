@@ -1,6 +1,6 @@
 # Verification record — current MVP
 
-**Recorded:** 2026-11-08. Re-run all commands on the submission machine and update this record if results differ.
+**Recorded:** 2026-11-08. Participant-provided Windows frontend output and an independently executed clean local HTTP smoke run are included below. Re-run all commands on the final submission checkout and update this record if results differ.
 
 ## Automated results in the working environment
 
@@ -11,10 +11,11 @@
 | `python -m compileall -q backend apps tests scripts` | **Passed** | Python syntax compilation |
 | Clean SQLite `alembic upgrade head` | **Passed** | Empty database `data/migration_verify.db` |
 | `alembic check` | **No new upgrade operations detected** | Models matched current initial migration in the tested environment |
-| `npm install` | **Timed out in this environment** | No `package-lock.json` was generated here |
-| TypeScript `transpileModule` syntax check | **14 files, 0 syntax diagnostics** | Checks TS/TSX parsing/transpilation only; does not resolve imports or validate React/Next types |
-| `tsc --noEmit` | **Not verified** | Frontend dependencies and type declarations are not installed; this is not a successful typecheck |
-| `npm run build` | **Not run / not verified** | Run after dependency install on the participant machine |
+| `npm install` | **Passed on participant Windows machine** | Participant reports 433 packages added; 8 moderate audit findings were shown. Do not run `npm audit fix --force` without reviewing changes. Retain the generated `package-lock.json`. |
+| `npm run lint` | **Passed on participant Windows machine** | ESLint completed with no errors or warnings in the supplied terminal output |
+| `npm run typecheck` | **Passed on participant Windows machine** | `tsc --noEmit` completed with no diagnostics |
+| `npm run build` | **Passed on participant Windows machine** | Next.js 16.4.5 production build compiled, typechecked and generated all 8 pages |
+| `python scripts/smoke_vertical_slice.py` | **8 checks passed** | Live HTTP smoke against a clean local SQLite API instance; confirms upload → contradicted evidence → approval block → hash-bound patch → v2 → supported claim → reviewer approval → history/audit |
 
 ## Golden evaluation interpretation
 
@@ -37,7 +38,8 @@ In `apps/web`:
 ```powershell
 npm install
 npm run lint
+npm run typecheck
 npm run build
 ```
 
-Only record those frontend checks as passed after they complete successfully.
+The participant has supplied successful output for all three frontend commands. Preserve the corresponding `package-lock.json` from the participant checkout.

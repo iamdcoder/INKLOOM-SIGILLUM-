@@ -1,0 +1,23 @@
+{
+  "build": "004",
+  "name": "Inkloom Sigillum — Live Vertical Slice Verification",
+  "prepared_at": "2026-11-08",
+  "changes": [
+    "Added a live HTTP vertical-slice smoke script for the creator-to-reviewer lifecycle.",
+    "Recorded participant-confirmed Windows frontend lint, TypeScript and production build results.",
+    "Updated phase-gate, demo-runbook, README and AI/reuse-disclosure records.",
+    "Added a reproducible live smoke result report."
+  ],
+  "verification": {
+    "backend_pytest": "27 passed",
+    "golden_evaluation": {"pass": 11, "manual_review_required": 1, "fail": 0, "total": 12},
+    "live_api_vertical_slice": {"result": "PASS", "checks_passed": 8, "submission_status": "APPROVED"},
+    "frontend_lint_typecheck_build": "participant-confirmed on Windows"
+  },
+  "limitations": [
+    "Live smoke covers the HTTP API lifecycle, not browser automation.",
+    "The local demo runtime is synchronous and uses SQLite plus local filesystem storage.",
+    "PostgreSQL/pgvector and MinIO are not active application adapters.",
+    "Durable worker orchestration, production multi-tenant isolation and automated visual identity/contrast certification are not implemented."
+  ]
+}

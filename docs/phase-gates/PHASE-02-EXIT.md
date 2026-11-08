@@ -13,8 +13,9 @@
 - [x] Pydantic request/response validation and OpenAPI endpoints.
 - [x] Next.js App Router, TypeScript, React and design tokens in frontend source.
 - [x] Unit/integration tests and labelled golden evaluation script.
-- [ ] Clean-checkout migration execution, CI migration job and smoke test retained as evidence.
-- [ ] Frontend dependency installation and `npm run build` verified; package lockfile retained.
+- [x] Live HTTP vertical-slice smoke test executed with 8 passing checks; report retained under `reports/live_vertical_slice_smoke_latest.json`.
+- [ ] Clean-checkout migration execution and CI migration job retained as evidence.
+- [x] Participant Windows frontend dependency install, `npm run lint`, `npm run typecheck` and `npm run build` passed; retain and commit the participant-generated package lockfile.
 - [ ] CI workflow with formatting, lint, typecheck, migration and smoke tests.
 - [ ] PostgreSQL/pgvector and MinIO adapters connected and tested; Compose currently remains a scaffold.
 - [ ] Worker process, durable job table/leases and workflow checkpoints implemented; reviews currently execute synchronously.
@@ -24,8 +25,8 @@
 - Python test suite: **27 passing tests** in the recorded development environment.
 - Synthetic golden corpus: **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED, 0 FAIL**.
 - Python compilation: run `python -m compileall -q backend apps tests scripts` before release.
-- Frontend: not build-verified; run `npm install` and `npm run build` locally before describing it as build-successful.
+- Frontend: participant-confirmed lint, typecheck and production build passed on Windows (2026-11-08).
 
 ## Gate decision
 
-**Gate status: PARTIALLY COMPLETE.** Core API/runtime, database schema, local storage, extraction, deterministic checks and frontend source exist. Production infrastructure, CI, active worker/orchestration, Postgres/pgvector/MinIO integration and a verified frontend build remain incomplete. This phase currently supports a local MVP demo, not a production-ready platform.
+**Gate status: PARTIALLY COMPLETE.** Core API/runtime, database schema, local storage, extraction, deterministic checks and frontend source exist. Production infrastructure, CI, active worker/orchestration and Postgres/pgvector/MinIO integration remain incomplete. The local MVP is demonstrable but is not production-ready. This phase currently supports a local MVP demo, not a production-ready platform.

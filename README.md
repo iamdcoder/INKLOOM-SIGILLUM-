@@ -37,14 +37,14 @@ The current MVP has a real, locally runnable API and an implemented Next.js UI s
 - Tone checks are configured phrase/pattern checks, not a calibrated model of brand voice.
 - Text patching is supported for TXT. Other formats require editing in their native application and uploading a new version.
 - A full standalone Correction Studio, Reviewer Console, Governance/Impact Radar and Administration configuration UI are not complete.
-- The frontend dependency installation timed out in the build environment. Its source is included, but `npm run build` has **not** been verified here.
+- The participant's Windows environment has now passed `npm run lint`, `npm run typecheck` and `npm run build` (2026-11-08). The generated `apps/web/package-lock.json` should be committed and retained with the submission.
 - No hosted LLM, embedding, OCR or external data provider is called by this build.
 
 ## Stack
 
 | Layer | Current MVP | Not to be confused with |
 |---|---|---|
-| Web | Next.js App Router, React, TypeScript, Lucide, custom CSS tokens | Production-ready verified frontend build |
+| Web | Next.js App Router, React, TypeScript, Lucide, custom CSS tokens | Participant-verified local build; not a production deployment or comprehensive browser E2E suite |
 | API | FastAPI, Pydantic | Independent microservices |
 | Persistence | SQLAlchemy 2.x, local SQLite, Alembic initial migration | Active PostgreSQL/pgvector runtime |
 | File storage | Private local filesystem, SHA-256 metadata | Active S3/MinIO integration |
@@ -108,7 +108,7 @@ Build verification:
 npm run build
 ```
 
-Do not report a successful frontend build until this command completes successfully in the target environment.
+The participant has already confirmed a successful production build on the Windows development machine (2026-11-08). Re-run this command on the final submission checkout after the last source change.
 
 ## Tests and evaluation
 
@@ -117,10 +117,12 @@ From the repository root with the Python environment active:
 ```powershell
 pytest
 python scripts/evaluate_golden_cases.py
+# With the API running in another terminal:
+python scripts/smoke_vertical_slice.py
 python -m compileall -q backend apps tests scripts
 ```
 
-The golden report is written to `reports/golden_evaluation_latest.json`. The current synthetic set is designed to exercise the anchor 40%-versus-28% claim, a supported exact claim, expired/future facts, conflicting sources, missing evidence, unsupported quantified statements, instruction-like text, terminology, tone, low OCR confidence and visual manual review.
+The golden report is written to `reports/golden_evaluation_latest.json`. The current synthetic set is designed to exercise the anchor 40%-versus-28% claim, a supported exact claim, expired/future facts, conflicting sources, missing evidence, unsupported quantified statements, instruction-like text, terminology, tone, low OCR confidence and visual manual review. The live smoke script then exercises the full creator-to-reviewer API path.
 
 ## Primary judge demo
 
@@ -184,6 +186,7 @@ Review `docs/governance/AI_AND_REUSE_DISCLOSURE.md` before submission. The suppl
 - Backend test suite: **27 passed** in the recorded local run.
 - Synthetic golden corpus: **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED, 0 FAIL** across 12 cases. The manual case is intentional: logo identity and contrast are not auto-certified.
 - Each review now stores the full Brand Knowledge Pack snapshot, its SHA-256 fingerprint and the deterministic ruleset version. The API exposes a version-history timeline with hashes and decisions.
-- TypeScript/TSX syntax transpilation: **14 source files, 0 syntax diagnostics**. This is not a full typecheck. The frontend dependency install/build has **not yet been verified** in this authoring environment because DNS resolution to `registry.npmjs.org` failed. Run frontend install, lint, typecheck and production build on the participant machine before submission; commit the generated `package-lock.json`.
+- Participant Windows frontend verification: **lint passed, TypeScript passed, production build passed** on 2026-11-08. Keep the participant-generated `apps/web/package-lock.json` in the submission repository.
+- Live API vertical-slice smoke: **8 checks passed** against a clean local database: readiness, authentication, upload, evidence-linked contradiction, approval blocking, hash-bound correction, immutable version history, corrected-version approval and audit events. See `docs/technical/LIVE_VERTICAL_SLICE_SMOKE.md`.
 
 See `docs/phase-gates/PHASE-02-STATUS.md` for the remaining gate items and exact commands.

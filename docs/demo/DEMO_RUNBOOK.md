@@ -70,7 +70,17 @@ Do not use these demo credentials for real content or a public production deploy
 - Low-confidence image: `fixtures/images/social_low_confidence_ocr.png` → extraction confidence below 0.75, manual review.
 - Prompt injection text: upload an instruction-like phrase → untrusted-content finding; it is never executed.
 
-## 7. Verification commands
+## 7. Live vertical-slice smoke test
+
+With the API running on `http://127.0.0.1:8000`, open another terminal at the repository root and run:
+
+```powershell
+python scripts/smoke_vertical_slice.py
+```
+
+The script authenticates as creator and reviewer, uploads a synthetic 40% claim, confirms the reviewer cannot approve an unresolved blocking finding, proposes and accepts the constrained TXT correction, confirms a new immutable version and hash, approves the corrected version, then verifies version history and audit events. It creates one additional synthetic submission and does not modify or delete existing records. Set `SIGILLUM_DEMO_PASSWORD` if the local demo password differs from the default.
+
+## 8. Verification commands
 
 ```powershell
 pytest
@@ -80,6 +90,6 @@ python -m compileall -q backend apps tests scripts
 
 The synthetic golden evaluator currently targets 12 labelled cases: 11 automated PASS, 1 explicit visual MANUAL_REVIEW_REQUIRED and 0 FAIL at the current recorded run. It is a deterministic regression set, not an accuracy estimate.
 
-## 8. Fallback demonstration
+## 9. Fallback demonstration
 
-If the frontend cannot be installed in the judging environment, use FastAPI docs at `http://127.0.0.1:8000/docs` and the same seeded demo identities to exercise the API. Do not claim the frontend build passed unless `npm run build` has been run successfully in the target environment.
+If the frontend cannot be started in the judging environment, use FastAPI docs at `http://127.0.0.1:8000/docs` and the same seeded demo identities as a fallback. The participant has confirmed that the frontend production build passed locally; this fallback does not replace the intended browser demonstration.

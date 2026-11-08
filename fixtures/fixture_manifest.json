@@ -1,0 +1,164 @@
+{
+  "schema_version": "1.0.0",
+  "synthetic_only": true,
+  "generation_script": "scripts/generate_demo_fixtures.py",
+  "cases": [
+    {
+      "file": "documents/claim_40_percent.txt",
+      "case_id": "GOLD-001",
+      "expected": "CONTRADICTED",
+      "format": "TXT",
+      "bytes": 214,
+      "sha256": "e10c28b714ddde4f354a71cda711b4f9af20ab89b8bf58375d4369610df67e56"
+    },
+    {
+      "file": "documents/claim_40_percent.docx",
+      "case_id": "GOLD-001",
+      "expected": "CONTRADICTED",
+      "format": "DOCX",
+      "bytes": 36729,
+      "sha256": "246a465341ce6812fcc539a0512bf1763f5d578f9ed6e23628a6a4f77750db6a"
+    },
+    {
+      "file": "documents/claim_40_percent.pdf",
+      "case_id": "GOLD-001",
+      "expected": "CONTRADICTED",
+      "format": "PDF",
+      "page": 1,
+      "approx_claim_bbox_points": [
+        52,
+        696.8897637795277,
+        400,
+        726.8897637795277
+      ],
+      "bytes": 1708,
+      "sha256": "a28056d6d23f9e9730f04601c10217d5fece0c2b53f0d96dc339148fde779063"
+    },
+    {
+      "file": "documents/claim_28_percent.txt",
+      "case_id": "GOLD-002",
+      "expected": "SUPPORTED",
+      "format": "TXT",
+      "bytes": 229,
+      "sha256": "fe767195d1ffc9dd716936866312d2647ad781876580890bf4bd7b04c000e886"
+    },
+    {
+      "file": "documents/expired_20_percent.txt",
+      "case_id": "GOLD-003",
+      "expected": "STALE_OR_UNVERIFIABLE",
+      "format": "TXT",
+      "bytes": 101,
+      "sha256": "90b968e253e8418a445626805a633954177694ba7dedfa76f330e1ebf8f6b0b0"
+    },
+    {
+      "file": "documents/future_25_percent.txt",
+      "case_id": "GOLD-004",
+      "expected": "UNVERIFIABLE_OR_NOT_YET_VALID",
+      "format": "TXT",
+      "bytes": 100,
+      "sha256": "a03b0c56a78becd2776599820e88b96b433a06f641db260e688a3cf05384190a"
+    },
+    {
+      "file": "documents/conflicting_29_percent.txt",
+      "case_id": "GOLD-005",
+      "expected": "CONFLICTING",
+      "format": "TXT",
+      "bytes": 99,
+      "sha256": "2a882279be41f7fa64c16dff2331d5bc890ed21ab6bb04ac37ffe54d45015e87"
+    },
+    {
+      "file": "documents/absent_evidence_72_hours.txt",
+      "case_id": "GOLD-006",
+      "expected": "UNVERIFIABLE",
+      "format": "TXT",
+      "bytes": 47,
+      "sha256": "c0cee0e4b6999fd497140cf7a3092b2a3f78bbe36d126a5d2ba49f22e425e187"
+    },
+    {
+      "file": "documents/terminology_variant.txt",
+      "case_id": "GOLD-011",
+      "expected": "TERMINOLOGY_VARIANT",
+      "format": "TXT",
+      "bytes": 42,
+      "sha256": "22934eb64ddfc5e786eccbf0f4aec7772b4f09e757ca44f89532e7873c46de55"
+    },
+    {
+      "file": "documents/unsupported_tone.txt",
+      "case_id": "GOLD-012",
+      "expected": "TONE_REVIEW_REQUIRED",
+      "format": "TXT",
+      "bytes": 55,
+      "sha256": "2e761a2273c5433d2a5b15111ad3d3e559beb634a775d80960d6813c6dc2d76c"
+    },
+    {
+      "file": "images/social_unsupported_claim.png",
+      "case_id": "GOLD-007",
+      "expected": [
+        "ASSET_NOT_APPROVED",
+        "CONTRAST_REVIEW_REQUIRED"
+      ],
+      "format": "PNG",
+      "image_size": [
+        1080,
+        1350
+      ],
+      "bytes": 48505,
+      "sha256": "109786f842eaf575fa57386c1297feb17d83b9626ab8a0bf6d5ccefba2c1dc48"
+    },
+    {
+      "file": "images/social_unsupported_claim.jpg",
+      "case_id": "GOLD-007",
+      "expected": [
+        "ASSET_NOT_APPROVED",
+        "CONTRAST_REVIEW_REQUIRED"
+      ],
+      "format": "JPG",
+      "image_size": [
+        1080,
+        1350
+      ],
+      "bytes": 79040,
+      "sha256": "06d5d13802fba5bfd0b7e5bcf3865f0b302aaacb56d36a4274b9ccc62a118ce0"
+    },
+    {
+      "file": "images/social_supported_clean.png",
+      "case_id": "GOLD-002",
+      "expected": "SUPPORTED_CLEAN_VISUAL",
+      "format": "PNG",
+      "image_size": [
+        1080,
+        1350
+      ],
+      "bytes": 51166,
+      "sha256": "2084b2e41f54e3de4d99d6ebb3381b0d546ad003e664526be278804259986ef8"
+    },
+    {
+      "file": "images/social_low_confidence_ocr.png",
+      "case_id": "GOLD-008",
+      "expected": "EXTRACTION_WARNING_AND_MANUAL_REVIEW",
+      "format": "PNG",
+      "image_size": [
+        1080,
+        1350
+      ],
+      "bytes": 156364,
+      "sha256": "b75d892ddbd3d6422aa1f93472316f1a746be1f60ad493931f1360bcec1b3de0"
+    },
+    {
+      "file": "documents/malformed.pdf",
+      "case_id": "GOLD-009",
+      "expected": "INTAKE_REJECTED",
+      "format": "PDF",
+      "bytes": 65,
+      "sha256": "89ed6c84f1c2c43c08f74937debbb77148a0197e9243285f5e6d1ea2eedeffbb"
+    },
+    {
+      "file": "documents/oversized_upload.txt",
+      "case_id": "GOLD-009",
+      "expected": "INTAKE_REJECTED",
+      "format": "TXT",
+      "bytes": 1500027,
+      "sha256": "262d2250782a88d2106111f2914894a65955637f962e883de5671c7a08baea96"
+    }
+  ]
+}

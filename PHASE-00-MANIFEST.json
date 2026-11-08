@@ -1,0 +1,15 @@
+{
+  "project": "Inkloom Sigillum",
+  "pack": "Phase 00-01 Planning Pack",
+  "updated": "2026-11-08",
+  "requirements_count": 40,
+  "phase_00_gate": "OPEN_PENDING_EVENT_WINDOW_AND_EVENT_SPECIFIC_VERIFICATION",
+  "phase_01_gate": "IN_PROGRESS_DESIGN_DOCUMENTS_PREPARED_PROTOTYPE_PENDING",
+  "source_of_truth": "SIGILLUM_Plan",
+  "problem_statement": "Problemstatemnt(2).pdf",
+  "synthetic_demo_brand": "ORBITA",
+  "disclosure": "Pre-window AI-assisted planning/scaffold; disclose if retained or reused.",
+  "functional_application_code_present": false,
+  "pre_window_fixture_helper_code_present": true,
+  "pre_window_disclosure_required": true
+}

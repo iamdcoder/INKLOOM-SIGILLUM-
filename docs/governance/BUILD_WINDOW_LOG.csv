@@ -1,0 +1,10 @@
+item,status,official_source,exact_value,verified_by,verified_at,action
+Official build-window start,PENDING,Organiser announcement,,,,Do not implement application code before confirmed start
+Official build-window end,PENDING,Organiser announcement,,,,Set freeze and submission controls
+Timezone,PENDING,Organiser announcement,,,,Record exact timezone
+Pre-window work boundary,PARTIALLY_EXTRACTED,Problemstatemnt(2).pdf,"Research, planning, interviews and discussion permitted unless event instructions state otherwise",Participant,2026-11-08,Check for event-specific instructions
+Reuse and boilerplate,PARTIALLY_EXTRACTED,Problemstatemnt(2).pdf,"Must be clearly disclosed",Participant,2026-11-08,Confirm treatment of the Phase 00 starter archive
+AI assistance,PARTIALLY_EXTRACTED,Problemstatemnt(2).pdf,"Permitted unless stated otherwise; significant tools and AI-generated components disclosed",Participant,2026-11-08,Confirm any event-specific disclosure form
+External services and data handling,PENDING,Organiser announcement,,,,Verify provider/API restrictions and privacy handling
+Submission deadline,PENDING,Organiser announcement,,,,Record exact date/time/timezone
+Repository visibility,PENDING,Organiser announcement,,,,Default expectation is judge-accessible unless alternative approved

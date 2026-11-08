@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="180" viewBox="0 0 640 180">
+  <rect width="640" height="180" rx="22" fill="#F5F7FA"/>
+  <circle cx="92" cy="90" r="48" fill="#12304A"/>
+  <path d="M92 54 L101 81 L130 81 L106 98 L115 126 L92 109 L69 126 L78 98 L54 81 L83 81 Z" fill="#61D6C8"/>
+  <text x="166" y="108" font-family="Arial, sans-serif" font-size="70" font-weight="700" letter-spacing="5" fill="#12304A">ORBITA</text>
+</svg>

@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "preferred_terms": [
+    {
+      "term_id": "TERM-001",
+      "preferred": "ORBITA Air One",
+      "locale": "en-IN",
+      "scope": [
+        "all"
+      ],
+      "status": "approved"
+    },
+    {
+      "term_id": "TERM-002",
+      "preferred": "up to 28% savings",
+      "locale": "en-IN",
+      "scope": [
+        "OFFER-ORBITA-OCT-NOV-2026"
+      ],
+      "status": "approved"
+    }
+  ],
+  "prohibited_or_review_terms": [
+    {
+      "term_id": "TERM-101",
+      "variant": "Orbita Air",
+      "preferred_term_id": "TERM-001",
+      "reason": "Incomplete product name",
+      "severity": "review_required"
+    },
+    {
+      "term_id": "TERM-102",
+      "variant": "guaranteed 40% savings",
+      "preferred_term_id": null,
+      "reason": "Unsupported guarantee and amount",
+      "severity": "blocking"
+    }
+  ]
+}

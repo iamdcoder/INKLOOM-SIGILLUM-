@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "pack_id": "BKP-ORBITA-DEMO",
+  "pack_version": "1.0.0-demo",
+  "brand_id": "brand_orbita_demo",
+  "brand_name": "ORBITA",
+  "is_synthetic": true,
+  "description": "Fictional brand and test-only content. Not associated with a real organisation.",
+  "default_locale": "en-IN",
+  "supported_locales": [
+    "en-IN"
+  ],
+  "geographies": [
+    "IN"
+  ],
+  "channels": [
+    "direct_web",
+    "social",
+    "print"
+  ],
+  "owner_id": "demo-brand-owner",
+  "status": "approved_demo",
+  "effective_from": "2026-10-01T00:00:00+05:30",
+  "effective_until": null
+}

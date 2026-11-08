@@ -109,13 +109,16 @@ class ReviewService:
             brand_pack_version=self.pack.version(),
             knowledge_pack_hash=self.pack.fingerprint(),
             knowledge_pack_snapshot=self.pack.snapshot(),
-            analysis_config_version="deterministic-rules-v1",
+            analysis_config_version="deterministic-temporal-rrf-v2",
             status="COMPLETED",
         )
         self.db.add(review); self.db.flush()
-        context={"offer_id":submission.offer_id,"geography":submission.geography,"channel":submission.channel,"locale":submission.locale,"audience":submission.audience}
+        context={"brand_id": submission.brand_id, "offer_id":submission.offer_id,"geography":submission.geography,"channel":submission.channel,"locale":submission.locale,"audience":submission.audience}
         publication_at = datetime.fromisoformat(submission.publication_at.replace("Z", "+00:00"))
-        findings=self.engine.analyse(version.extracted_text,context,publication_at,version.extraction_confidence,version.regions)
+        # ReviewRun.created_at is the recorded/system-time boundary. The exact pack
+        # snapshot is persisted above, so later publication cannot rewrite this run.
+        knowledge_as_of = review.created_at or datetime.now(timezone.utc)
+        findings=self.engine.analyse(version.extracted_text,context,publication_at,version.extraction_confidence,version.regions,knowledge_as_of=knowledge_as_of)
         if version.mime_type in {"image/png", "image/jpeg"}:
             # Logo identity remains human-confirmed. Contrast estimates are candidate
             # measurements and remain review-required rather than automatic approval.

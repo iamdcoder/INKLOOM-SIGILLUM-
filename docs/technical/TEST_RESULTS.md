@@ -6,9 +6,9 @@
 
 | Check | Result | Notes |
 |---|---|---|
-| `pytest -q` | **27 passed** | Unit and API integration tests, including creator ownership and image manual-review approval path |
+| `python -m pytest tests -q` | **50 passed** | Build 008 unit and API integration tests, including temporal retrieval, source precedence and Brand Owner lifecycle |
 | `python scripts/evaluate_golden_cases.py` | **11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL** | 12 synthetic ORBITA cases; manual item covers automated logo identity/contrast which is intentionally not implemented |
-| `python -m compileall -q backend apps tests scripts` | **Passed** | Python syntax compilation |
+| `python -m compileall -q backend tests` | **Passed** | Python syntax compilation |
 | Clean SQLite `alembic upgrade head` | **Passed** | Empty database `data/migration_verify.db` |
 | `alembic check` | **No new upgrade operations detected** | Models matched current initial migration in the tested environment |
 | `npm install` | **Passed on participant Windows machine** | Participant reports 433 packages added; 8 moderate audit findings were shown. Do not run `npm audit fix --force` without reviewing changes. Retain the generated `package-lock.json`. |
@@ -55,3 +55,21 @@ The participant has supplied successful output for all three frontend commands. 
 - Frontend: the changed TSX file passes TypeScript syntax transpilation. Full ESLint, project typecheck and Next.js production build must be rerun on the developer machine because this packaging environment does not contain the project's installed npm dependencies.
 
 The image contrast value is a local segmentation estimate, not a complete accessibility audit. Human confirmation remains mandatory.
+
+
+## Build 007 verification (2026-11-08)
+
+- `python -m compileall -q backend/sigillum apps tests scripts`: passed.
+- `python -m pytest tests -q`: **40 passed**.
+- New Knowledge Pack tests cover immutable version publication, duplicate-ID validation, stale-draft protection, cross-platform asset-path traversal rejection, Brand Owner authorization, publication audit events and preservation of historical review fingerprints.
+- Frontend TSX syntax transpilation: zero syntax diagnostics. Full Next.js lint/typecheck/production build must be rerun on the participant Windows environment after applying the patch.
+
+## Build 008 — temporal truth and retrieval (2026-11-08)
+
+- `python -m pytest tests -q`: **50 passed**.
+- `python -m compileall -q backend tests`: passed.
+- `python scripts/evaluate_golden_cases.py`: **11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL**.
+- `python scripts/smoke_vertical_slice.py` against a fresh isolated SQLite-backed local API: **8/8 checks passed**; report retained at `reports/build008_live_smoke_verification.json`.
+- New tests cover valid-time versus record-time separation, not-yet-recorded facts, no-longer-recorded facts, invalid time intervals, approved-only retrieval, fail-closed missing scope, deterministic RRF trace, evidence provenance and source precedence.
+- Workbench TSX syntax transpilation: to be checked in the packaging environment; participant must run `npm run lint`, `npm run typecheck`, and `npm run build` on Windows after applying Build 008.
+- No database migration was added. Current pack source and retrieval remain local filesystem/JSON adapters.

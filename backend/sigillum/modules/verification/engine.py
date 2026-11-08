@@ -6,10 +6,11 @@ It evaluates supported structured claim patterns against approved, scoped eviden
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sigillum.modules.knowledge.brand_pack import BrandPack
+from sigillum.modules.retrieval.evidence import retrieve_fact_candidates
 
 PERCENT_CLAIM = re.compile(
     r"(?P<qualifier>up\s+to\s+)?(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>%|percent)",
@@ -28,51 +29,18 @@ PROMPT_INJECTION = re.compile(
 SCOPE_FIELDS = ("offer_id", "geography", "channel", "locale", "audience")
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def _normalise_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
-
-
-def _active(fact: dict[str, Any], publication_at: datetime) -> bool:
-    start = _parse_datetime(fact.get("valid_from"))
-    end = _parse_datetime(fact.get("valid_until"))
-    when = _normalise_datetime(publication_at)
-    return (start is None or start <= when) and (end is None or when <= end)
-
-
-def _scope_match(fact: dict[str, Any], context: dict[str, Any]) -> bool:
-    """Fail closed: each non-empty fact scope dimension must be present and equal."""
-    for field in SCOPE_FIELDS:
-        expected = fact.get(field)
-        if expected is None or expected == "":
-            continue
-        actual = context.get(field)
-        if actual is None or str(actual).strip() == "":
-            return False
-        if str(actual).casefold() != str(expected).casefold():
-            return False
-    return True
-
-
 def _authority(fact: dict[str, Any]) -> int:
+    """Higher numeric rank wins; equal top ranks remain visible as conflicts."""
     try:
-        return int(fact.get("authority_rank", 1))
+        return int(fact.get("source_precedence", fact.get("authority_rank", 1)))
     except (TypeError, ValueError):
         return 1
 
 
-def _source_evidence(fact: dict[str, Any]) -> dict[str, Any]:
+def _source_evidence(fact: dict[str, Any], candidate: dict[str, Any] | None = None) -> dict[str, Any]:
     source = fact.get("source_ref") or {}
+    candidate = candidate or {}
+    temporal = candidate.get("temporal") or {}
     return {
         "fact_id": fact.get("fact_id"),
         "source_id": source.get("source_id"),
@@ -83,8 +51,19 @@ def _source_evidence(fact: dict[str, Any]) -> dict[str, Any]:
         "qualifier": fact.get("qualifier"),
         "valid_from": fact.get("valid_from"),
         "valid_until": fact.get("valid_until"),
+        "recorded_at": fact.get("recorded_at") or fact.get("recorded_from"),
+        "recorded_until": fact.get("recorded_until") or fact.get("superseded_at"),
         "authority_rank": _authority(fact),
+        "source_precedence": _authority(fact),
         "scope": {key: fact.get(key) for key in SCOPE_FIELDS},
+        "temporal_state": temporal.get("valid_state"),
+        "record_time_state": temporal.get("record_state"),
+        "temporal_reason": temporal.get("reason_code"),
+        "eligible_for_proof": bool(candidate.get("eligible", True)),
+        "retrieval_method": candidate.get("retrieval_method", "legacy_structured_match"),
+        "lexical_rank": candidate.get("lexical_rank"),
+        "structured_rank": candidate.get("structured_rank"),
+        "rrf_score": candidate.get("rrf_score"),
     }
 
 
@@ -138,6 +117,7 @@ class VerificationEngine:
         publication_at: datetime,
         extraction_confidence: float = 1.0,
         regions: list[dict[str, Any]] | None = None,
+        knowledge_as_of: datetime | None = None,
     ) -> list[dict[str, Any]]:
         findings: list[dict[str, Any]] = []
         content_regions = regions or []
@@ -167,7 +147,7 @@ class VerificationEngine:
             )
 
         self._analyse_percentage_claims(
-            text, context, publication_at, confidence, content_regions, findings
+            text, context, publication_at, confidence, content_regions, findings, knowledge_as_of
         )
         self._analyse_unmatched_quantities(text, confidence, content_regions, findings)
         self._analyse_terminology(text, confidence, content_regions, findings)
@@ -183,21 +163,36 @@ class VerificationEngine:
         extraction_confidence: float,
         regions: list[dict[str, Any]],
         findings: list[dict[str, Any]],
+        knowledge_as_of: datetime | None = None,
     ) -> None:
-        all_facts = [
-            fact
-            for fact in self.pack.facts
-            if fact.get("status") == "approved"
-            and fact.get("predicate") == "maximum_saving"
-            and fact.get("unit") == "%"
-            and _scope_match(fact, context)
+        retrieval = retrieve_fact_candidates(
+            self.pack.facts,
+            query=text,
+            context={**context, "brand_id": self.pack.brand.get("brand_id")},
+            publication_at=publication_at,
+            knowledge_as_of=knowledge_as_of,
+            predicate="maximum_saving",
+            unit="%",
+            limit=20,
+        )
+        candidates = retrieval["candidates"]
+        eligible_candidates = [candidate for candidate in candidates if candidate["eligible"]]
+        relevant_active = [candidate["record"] for candidate in eligible_candidates]
+        future = [
+            candidate for candidate in candidates
+            if candidate["temporal"].get("valid_state") == "FUTURE"
+            and candidate["temporal"].get("record_state") not in {"NOT_YET_RECORDED", "NO_LONGER_RECORDED"}
         ]
-        active_facts = [fact for fact in all_facts if _active(fact, publication_at)]
-        relevant_active = [
-            fact
-            for fact in active_facts
-            if not fact.get("subject") or fact["subject"].casefold() in text.casefold()
+        expired = [
+            candidate for candidate in candidates
+            if candidate["temporal"].get("valid_state") == "EXPIRED"
+            and candidate["temporal"].get("record_state") not in {"NOT_YET_RECORDED", "NO_LONGER_RECORDED"}
         ]
+        not_recorded = [
+            candidate for candidate in candidates
+            if candidate["temporal"].get("record_state") in {"NOT_YET_RECORDED", "NO_LONGER_RECORDED"}
+        ]
+        candidate_by_id = {str(candidate["record"].get("fact_id")): candidate for candidate in candidates}
 
         for match in PERCENT_CLAIM.finditer(text):
             claimed_value = float(match.group("value"))
@@ -208,64 +203,77 @@ class VerificationEngine:
             reason = "NO_APPLICABLE_APPROVED_EVIDENCE"
             sufficiency = "INSUFFICIENT"
             explanation = (
-                "No approved fact matches all supplied scope dimensions and the intended publication "
-                "time. Sigillum abstains rather than using unrelated brand information."
+                "No approved fact matches all supplied scope dimensions, the intended publication time "
+                "and the knowledge snapshot available when this review was recorded. Sigillum abstains "
+                "rather than using unrelated or temporally inapplicable brand information."
             )
             evidence: list[dict[str, Any]] = []
             suggestions: list[str] = []
 
-            if not relevant_active and all_facts:
-                future = [
-                    fact
-                    for fact in all_facts
-                    if _parse_datetime(fact.get("valid_from"))
-                    and _parse_datetime(fact.get("valid_from")) > _normalise_datetime(publication_at)
-                ]
-                expired = [
-                    fact
-                    for fact in all_facts
-                    if _parse_datetime(fact.get("valid_until"))
-                    and _parse_datetime(fact.get("valid_until")) < _normalise_datetime(publication_at)
-                ]
-                if future and not expired:
+            if not relevant_active:
+                if not_recorded:
+                    reason = "FACT_NOT_RECORDED_AT_REVIEW_TIME"
+                    explanation = (
+                        "A matching approved record exists in the supplied knowledge snapshot, but its "
+                        "record-time interval does not include this review. It cannot be used as evidence "
+                        "for this decision."
+                    )
+                    evidence = [
+                        _source_evidence(candidate["record"], {**candidate, "eligible": False})
+                        for candidate in not_recorded
+                    ]
+                elif future and not expired:
                     reason = "FACT_NOT_YET_VALID"
                     explanation = (
                         "Approved evidence exists, but its effective period begins after the intended "
                         "publication time. Future-effective evidence cannot prove a current claim."
                     )
-                    evidence = [_source_evidence(fact) for fact in future]
+                    evidence = [
+                        _source_evidence(candidate["record"], {**candidate, "eligible": False})
+                        for candidate in future
+                    ]
                 elif expired:
                     verdict = "STALE"
                     reason = "FACT_OUTSIDE_VALIDITY_WINDOW"
                     explanation = (
                         "Related approved evidence has expired and cannot substantiate a claim at the "
-                        "intended publication time."
+                        "intended publication time. The historical source is retained for explanation, "
+                        "not treated as current proof."
                     )
-                    evidence = [_source_evidence(fact) for fact in expired]
+                    evidence = [
+                        _source_evidence(candidate["record"], {**candidate, "eligible": False})
+                        for candidate in expired
+                    ]
 
-            elif relevant_active:
+            else:
+                # Source precedence is applied only after scope and both time dimensions
+                # have been resolved. Equal top-precedence sources remain a conflict.
                 highest_rank = max(_authority(fact) for fact in relevant_active)
                 authoritative = [
                     fact for fact in relevant_active if _authority(fact) == highest_rank
                 ]
+                authoritative.sort(key=lambda fact: str(fact.get("fact_id", "")))
                 values = {
                     (fact.get("value"), fact.get("unit"), fact.get("qualifier"))
                     for fact in authoritative
                 }
+                evidence = [
+                    _source_evidence(fact, candidate_by_id.get(str(fact.get("fact_id"))))
+                    for fact in authoritative
+                ]
                 if len(values) > 1:
                     verdict = "CONFLICTING"
                     severity = "blocking"
                     reason = "EQUAL_AUTHORITY_EVIDENCE_CONFLICT"
                     sufficiency = "CONFLICTING"
                     explanation = (
-                        "The highest-authority approved sources disagree. Sigillum will not choose "
-                        "one by retrieval order; a brand owner must resolve the conflict."
+                        "The highest-precedence approved sources disagree. Sigillum will not select "
+                        "one by retrieval order; a Brand Owner must resolve the conflict. Lower-precedence "
+                        "records do not silently override the highest-precedence group."
                     )
-                    evidence = [_source_evidence(fact) for fact in authoritative]
                 else:
                     fact = authoritative[0]
                     approved_value = float(fact["value"])
-                    evidence = [_source_evidence(fact)]
                     if claimed_value > approved_value:
                         verdict = "CONTRADICTED"
                         severity = "blocking"
@@ -288,7 +296,9 @@ class VerificationEngine:
                         sufficiency = "SUFFICIENT"
                         explanation = (
                             f"The {claimed_value:g}% claim matches approved evidence for the "
-                            "selected offer, channel, geography, locale, audience and publication date."
+                            "selected offer, channel, geography, locale, audience and publication date. "
+                            "The evidence candidate was selected using deterministic lexical and "
+                            "structured retrieval, then checked against source precedence and time."
                         )
                     else:
                         reason = "CLAIM_NOT_EXACTLY_SUBSTANTIATED"

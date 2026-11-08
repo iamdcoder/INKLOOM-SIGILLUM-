@@ -8,7 +8,7 @@ Sigillum is a pre-publication review workspace for checking text and static crea
 
 ## Current implementation status
 
-The current MVP has a real, locally runnable API and an implemented Next.js UI source tree. The API/integration suite has **27 passing tests** in the recorded development environment. The synthetic golden evaluation reports **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED and 0 FAIL**. These are test outcomes for the included cases only, not a general accuracy estimate or external certification.
+The current MVP has a locally runnable API and an implemented Next.js UI source tree. Build 008 has **50 passing backend unit/integration tests** in the packaged source. It adds valid-time and record/system-time assessment plus deterministic lexical + structured Reciprocal Rank Fusion (RRF) evidence candidate retrieval. The synthetic golden evaluation reports **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED and 0 FAIL**. These are test outcomes for the included cases only, not a general accuracy estimate or external certification.
 
 ### Implemented in this MVP
 
@@ -17,26 +17,30 @@ The current MVP has a real, locally runnable API and an implemented Next.js UI s
 - PDF, DOCX, TXT, PNG and JPG/JPEG intake with byte limits, signature/type checks and defensive parsing limits.
 - Text extraction from TXT, searchable PDF, DOCX paragraphs/tables; local Tesseract OCR for PNG/JPG with word boxes and extraction confidence.
 - Immutable source versions with SHA-256 content hashes and retained original files.
-- Deterministic savings-claim checks against configured approved facts, required scope fields, authority, and publication validity dates.
+- Deterministic savings-claim checks against configured approved facts, required scope fields, source precedence, publication valid time and review record time.
+- Approved-only, scoped lexical + structured RRF evidence candidate retrieval with explainable ranks and temporal eligibility; vector/pgvector retrieval is explicitly not configured.
 - Conservative configured terminology, tone-pattern and untrusted-instruction-text checks.
 - A canonical finding ledger with distinct verdict, severity, confidence, extraction confidence, evidence sufficiency, reason code, source references, exact text span or explicit manual-review state.
 - Hash-bound TXT correction proposals that create a new content version and trigger a new review; revised PDFs, DOCX and images can be re-uploaded as new immutable versions.
 - Human reviewer decisions, mandatory reasons for reject/request-changes/override, role-gated override, approval blocking for unresolved blocking/review-required findings, and audit events.
 - Explicit visual review findings for logo identity and contrast on images, and for embedded visual content in PDF/DOCX.
-- Next.js screens for login, overview, submissions/upload, review workbench, Brand Control Center snapshot and audit history.
+- Next.js screens for login, overview, submissions/upload, review workbench, owner-governed Brand Control Center, Knowledge Pack version history and audit history.
+- Tenant-scoped filesystem-backed Knowledge Pack draft/edit/validate/publish lifecycle. Brand Owner is the only role allowed to mutate or publish brand truth; reviewers and administrators are read-only. Published versions are immutable, stale drafts are rejected, and each review preserves the exact pack snapshot/fingerprint used.
 
 ### Not implemented or not yet verified
 
 - The current runtime is a **single synthetic demo workspace**. PostgreSQL row-level security, production multi-tenant isolation, enterprise identity, invitations and SSO are not implemented.
 - SQLite and private local filesystem storage are the default active adapters. `infra/docker-compose.yml` is a PostgreSQL/pgvector + MinIO scaffold; the current API does not yet use those services.
 - Reviews execute synchronously in the API process. The worker directory is a scaffold; durable leases, retry budgets, LangGraph checkpointing, resumable jobs and SSE progress are not active.
-- Retrieval is a static, local Brand Knowledge Pack lookup for supported deterministic rules. Hybrid lexical/vector retrieval, RRF and permission-aware pgvector search are not implemented.
+- Retrieval uses a local deterministic lexical + structured RRF baseline for supported facts. Vector/pgvector search, HNSW indexing, retrieval Recall@5/MRR benchmarks and database-backed permission-aware search are not implemented.
 - Claim extraction is deliberately narrow (configured numeric savings patterns and selected quantified statements). It is not a general semantic claim verifier or legal compliance engine.
 - PNG/JPG OCR is local Tesseract. Scanned-PDF OCR and embedded-image OCR within PDF/DOCX are not implemented.
 - Logo identity matching, pixel-level palette analysis and standards-grade contrast measurement are not automated; the reviewer must inspect the original and record a reason.
 - Tone checks are configured phrase/pattern checks, not a calibrated model of brand voice.
 - Text patching is supported for TXT. Other formats require editing in their native application and uploading a new version.
 - A full standalone Correction Studio, Reviewer Console, Governance/Impact Radar and Administration configuration UI are not complete.
+- Knowledge Pack editing currently uses a structured JSON editor rather than guided record forms. Binary approved-asset upload/scanning and automatic impact re-review after a pack publication are not implemented.
+- The Knowledge Pack version store is tenant-scoped and filesystem-backed under `data/brand_packs/` for the single-host event build. Multi-process-safe distributed publishing and a PostgreSQL/object-store pack adapter are not yet implemented.
 - The participant's Windows environment has now passed `npm run lint`, `npm run typecheck` and `npm run build` (2026-11-08). The generated `apps/web/package-lock.json` should be committed and retained with the submission.
 - No hosted LLM, embedding, OCR or external data provider is called by this build.
 
@@ -160,7 +164,7 @@ backend/sigillum/
   infrastructure/      SQLAlchemy, security and storage boundary
   modules/
     content/           Safe file extraction and OCR
-    knowledge/         Synthetic Brand Knowledge Pack reader
+    knowledge/         Brand Knowledge Pack reader, immutable version store and draft lifecycle
     verification/      Deterministic claim/terminology/tone checks
     identity/          Identity module boundary (future expansion)
     retrieval/         Retrieval module boundary (future expansion)
@@ -183,13 +187,13 @@ Review `docs/governance/AI_AND_REUSE_DISCLOSURE.md` before submission. The suppl
 
 ## Latest engineering verification
 
-- Backend test suite: **27 passed** in the recorded local run.
+- Backend test suite: **50 passed** in Build 008 (unit + integration).
 - Synthetic golden corpus: **11 automated PASS, 1 MANUAL_REVIEW_REQUIRED, 0 FAIL** across 12 cases. The manual case is intentional: logo identity and contrast are not auto-certified.
-- Each review now stores the full Brand Knowledge Pack snapshot, its SHA-256 fingerprint and the deterministic ruleset version. The API exposes a version-history timeline with hashes and decisions.
+- Each review stores the full Brand Knowledge Pack snapshot, its SHA-256 fingerprint and the deterministic analysis-rule version. Build 008 evaluates valid time separately from record/system time and retains a lexical + structured RRF retrieval trace in evidence provenance. The API exposes a version-history timeline with hashes and decisions.
 - Participant Windows frontend verification: **lint passed, TypeScript passed, production build passed** on 2026-11-08. Keep the participant-generated `apps/web/package-lock.json` in the submission repository.
 - Live API vertical-slice smoke: **8 checks passed** against a clean local database: readiness, authentication, upload, evidence-linked contradiction, approval blocking, hash-bound correction, immutable version history, corrected-version approval and audit events. See `docs/technical/LIVE_VERTICAL_SLICE_SMOKE.md`.
 
-See `docs/phase-gates/PHASE-02-STATUS.md` for the remaining gate items and exact commands.
+See `docs/phase-gates/PHASE-02-STATUS.md`, `PHASE-07-STATUS.md` and `PHASE-08-STATUS.md` for remaining gate items and exact commands.
 
 
 ## Build 006 — Visual Evidence Intelligence

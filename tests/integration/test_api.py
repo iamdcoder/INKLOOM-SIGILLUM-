@@ -371,7 +371,7 @@ def test_review_history_binds_each_version_to_knowledge_snapshot_and_rejects_sta
     assert [item["version_number"] for item in versions] == [2, 1]
     assert versions[0]["sha256"] != versions[1]["sha256"]
     assert all(len(item["knowledge_pack_hash"]) == 64 for item in versions)
-    assert versions[0]["analysis_config_version"] == "deterministic-rules-v1"
+    assert versions[0]["analysis_config_version"] == "deterministic-temporal-rrf-v2"
     assert second["review"]["knowledge_pack_hash"] == versions[0]["knowledge_pack_hash"]
 
     reviewer = token(client, "reviewer@orbita.demo")

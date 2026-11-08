@@ -25,3 +25,8 @@ class HealthResponse(BaseModel):
     status: str
     database: str
     brand_pack: str
+
+
+class KnowledgePackSectionUpdate(BaseModel):
+    section: str
+    content: object

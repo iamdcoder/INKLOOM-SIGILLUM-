@@ -70,3 +70,40 @@
 .selected-region-card>b{font-size:12px;color:var(--text);overflow-wrap:anywhere}
 .selected-region-card>small{color:var(--muted);font-size:9px}
 @media(max-width:640px){.visual-inspector-summary{grid-template-columns:1fr}.image-region-stage{min-height:160px}}
+
+
+/* Build 007 — owner-governed, immutable Knowledge Pack lifecycle. */
+.knowledge-version-panel,.knowledge-editor-panel{overflow:hidden}
+.knowledge-version-list{padding:0 17px 9px}
+.knowledge-version-row{display:flex;align-items:center;gap:11px;padding:12px 0;border-bottom:1px solid var(--line-soft)}
+.knowledge-version-row:last-child{border-bottom:0}
+.knowledge-version-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px}
+.knowledge-version-copy b{font-size:11px}.knowledge-version-copy b span{margin-left:5px;color:var(--teal);font-size:9px;font-weight:500}
+.knowledge-version-copy small{font-size:8px;color:var(--muted);overflow-wrap:anywhere}
+.knowledge-readonly{margin:8px 16px 16px}
+.knowledge-editor-heading{align-items:flex-start;gap:14px;flex-wrap:wrap}
+.knowledge-editor-heading .panel-description{max-width:620px;margin:7px 0 0}
+.knowledge-empty{display:flex;align-items:center;flex-direction:column;gap:9px;padding:38px 20px;text-align:center;color:var(--muted)}
+.knowledge-empty>svg{color:var(--teal)}.knowledge-empty b{font-size:12px;color:var(--text)}.knowledge-empty span{max-width:480px;font-size:10px;line-height:1.65}
+.draft-context{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;padding:13px 17px;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);background:rgba(8,17,24,.32)}
+.draft-context>div{display:flex;min-width:0;flex-direction:column;gap:5px}.draft-context small{font-size:8px;color:var(--subtle);letter-spacing:.1em}.draft-context b{font-size:9px;overflow-wrap:anywhere}
+.knowledge-editor-layout{display:grid;grid-template-columns:205px minmax(0,1fr);min-height:390px}
+.knowledge-section-nav{display:flex;flex-direction:column;padding:13px 10px;border-right:1px solid var(--line-soft);background:rgba(6,14,21,.22)}
+.knowledge-section-nav button{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 10px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);font-size:10px;text-align:left;cursor:pointer}
+.knowledge-section-nav button:hover{background:var(--surface-2);color:var(--text)}.knowledge-section-nav button.selected{border-color:rgba(85,212,195,.2);background:var(--teal-soft);color:#b8e9e1}.knowledge-section-nav button.selected svg{color:var(--teal)}
+.knowledge-editor-main{display:flex;min-width:0;flex-direction:column;padding:14px;gap:11px}
+.knowledge-editor-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px}.knowledge-editor-toolbar b,.knowledge-editor-toolbar small{display:block}.knowledge-editor-toolbar b{font-size:11px}.knowledge-editor-toolbar small{margin-top:4px;color:var(--muted);font-size:9px;line-height:1.5}.knowledge-editor-toolbar>span{border:1px solid var(--line);border-radius:5px;padding:4px 7px;color:#a6b9c4;font-size:8px;letter-spacing:.1em}
+.knowledge-json-editor{width:100%;min-height:290px;flex:1;resize:vertical;padding:13px;border:1px solid var(--line);border-radius:8px;background:#08121b;color:#b9d4d7;font:10px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2;outline:none;white-space:pre;overflow:auto}
+.knowledge-json-editor:focus{border-color:var(--teal);box-shadow:0 0 0 2px rgba(85,212,195,.08)}
+.knowledge-editor-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.knowledge-editor-actions>span{color:var(--muted);font-size:9px;line-height:1.5}
+.knowledge-validation{margin:0 17px 14px;padding:13px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2)}.knowledge-validation.valid{border-color:rgba(112,209,161,.32)}.knowledge-validation.invalid{border-color:rgba(240,120,130,.4)}
+.knowledge-validation-title{display:flex;align-items:center;gap:8px;font-size:11px}.knowledge-validation.valid .knowledge-validation-title{color:var(--green)}.knowledge-validation.invalid .knowledge-validation-title{color:var(--red)}
+.knowledge-validation-item{display:grid;grid-template-columns:minmax(120px,.8fr) minmax(100px,1fr);gap:5px 12px;padding:10px 0;border-top:1px solid var(--line-soft);margin-top:8px}.knowledge-validation-item b{font-size:9px;color:#ffadb4}.knowledge-validation-item span{font-size:9px;color:var(--muted);overflow-wrap:anywhere}.knowledge-validation-item p{grid-column:1/-1;margin:0;font-size:9px;color:#c4d0d5;line-height:1.5}.knowledge-validation-note{margin:9px 0 0;font-size:9px;color:var(--muted);line-height:1.6}
+.knowledge-publish-actions{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:14px 17px;border-top:1px solid var(--line-soft);background:rgba(8,17,24,.3)}.knowledge-publish-actions>span{display:flex;align-items:flex-start;gap:7px;max-width:430px;color:var(--muted);font-size:9px;line-height:1.55}.knowledge-publish-actions>span svg{flex:none;color:var(--teal);margin-top:1px}.knowledge-publish-actions>div{display:flex;gap:8px;flex-wrap:wrap}
+.knowledge-footnote{display:flex;align-items:flex-start;gap:8px;padding:0 3px;color:var(--muted);font-size:9px;line-height:1.6}.knowledge-footnote svg{flex:none;color:var(--teal);margin-top:1px}
+.hash-value{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:9px!important;color:#a3c6c6}
+@media(max-width:760px){.knowledge-editor-layout{grid-template-columns:1fr}.knowledge-section-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-right:0;border-bottom:1px solid var(--line-soft)}.draft-context{grid-template-columns:1fr}.knowledge-publish-actions{align-items:stretch;flex-direction:column}.knowledge-publish-actions>div{display:grid;grid-template-columns:1fr}.knowledge-editor-actions{align-items:stretch;flex-direction:column}.knowledge-editor-actions .button{width:100%}.knowledge-version-row{align-items:flex-start;flex-wrap:wrap}.knowledge-version-row .status-pill{margin-left:44px}.knowledge-validation-item{grid-template-columns:1fr}}
+
+/* Build 008 — temporal provenance and retrieval transparency. */
+.source-row-diagnostic{border-left:2px solid rgba(246,184,83,.7);padding-left:9px;background:rgba(246,184,83,.035)}
+.evidence-diagnostic-label{display:inline-block!important;width:max-content;max-width:100%;margin:4px 0;padding:3px 6px;border:1px solid rgba(246,184,83,.35);border-radius:4px;color:#efc27b!important;font-size:7px!important;letter-spacing:.07em;font-weight:750}

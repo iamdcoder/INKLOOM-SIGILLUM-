@@ -144,9 +144,16 @@ function EvidenceRow({evidence}:{evidence:Record<string,unknown>}){
  const sourceVersion=displayValue(evidence.source_version);
  const value=[displayValue(evidence.value),displayValue(evidence.unit),displayValue(evidence.qualifier)].filter(Boolean).join(" · ");
  const validity=[displayValue(evidence.valid_from),displayValue(evidence.valid_until)].filter(Boolean);
+ const recorded=[displayValue(evidence.recorded_at),displayValue(evidence.recorded_until)].filter(Boolean);
  const scope=evidence.scope&&typeof evidence.scope==="object"&&!Array.isArray(evidence.scope)?Object.entries(evidence.scope as Record<string,unknown>).filter(([,v])=>v!==null&&v!==undefined&&v!=="").map(([k,v])=>`${k.replaceAll("_"," ")}: ${String(v)}`):[];
- const authority=displayValue(evidence.authority_rank);
- return <div className="source-row"><span className="source-icon"><BookOpenIcon/></span><span className="source-row-content"><b>{source}</b><small>{quote}</small>{sourceVersion&&<small>Source version: {sourceVersion}</small>}{value&&<small>Approved value: {value}</small>}{validity.length>0&&<small>Validity: {validity[0]} → {validity[1]||"open"}</small>}{scope.length>0&&<small>Scope: {scope.join(" · ")}</small>}{authority&&<small>Authority rank: {authority}</small>}</span></div>;
+ const authority=displayValue(evidence.source_precedence)||displayValue(evidence.authority_rank);
+ const temporalState=displayValue(evidence.temporal_state);
+ const recordTimeState=displayValue(evidence.record_time_state);
+ const retrievalMethod=displayValue(evidence.retrieval_method);
+ const lexicalRank=displayValue(evidence.lexical_rank);const structuredRank=displayValue(evidence.structured_rank);
+ const rrfScore=typeof evidence.rrf_score==="number"?evidence.rrf_score.toFixed(5):"";
+ const diagnostic=evidence.eligible_for_proof===false;
+ return <div className={`source-row ${diagnostic?"source-row-diagnostic":""}`}><span className="source-icon"><BookOpenIcon/></span><span className="source-row-content"><b>{source}</b>{diagnostic&&<small className="evidence-diagnostic-label">TEMPORAL DIAGNOSTIC — NOT USED AS PROOF</small>}<small>{quote}</small>{sourceVersion&&<small>Source version: {sourceVersion}</small>}{value&&<small>Approved value: {value}</small>}{validity.length>0&&<small>Valid time: {validity[0]} → {validity[1]||"open"}</small>}{recorded.length>0&&<small>Recorded time: {recorded[0]} → {recorded[1]||"current"}</small>}{scope.length>0&&<small>Scope: {scope.join(" · ")}</small>}{authority&&<small>Source precedence: {authority} (higher wins)</small>}{temporalState&&<small>Publication-time state: {temporalState}</small>}{recordTimeState&&<small>Knowledge-time state: {recordTimeState}</small>}{retrievalMethod&&<small>Retrieval: {retrievalMethod}{lexicalRank?` · lexical rank ${lexicalRank}`:""}{structuredRank?` · structured rank ${structuredRank}`:""}{rrfScore?` · RRF ${rrfScore}`:""}</small>}</span></div>;
 }
 function RegionDetails({region}:{region:Record<string,unknown>}){
  const kind=displayValue(region.kind);const page=displayValue(region.page);const confidence=displayValue(region.confidence);const regionId=displayValue(region.region_id);const bbox=region.bbox&&typeof region.bbox==="object"&&!Array.isArray(region.bbox)?region.bbox as Record<string,unknown>:null;

@@ -1,23 +1,29 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from sigillum.config import get_settings
 from sigillum.api.dependencies import CurrentUser, DbSession, require_roles
-from sigillum.api.schemas import LoginRequest, TokenResponse, DecisionRequest, PatchRequest, RevisionRequest
+from sigillum.infrastructure.database.session import get_db
+from sigillum.api.schemas import LoginRequest, TokenResponse, DecisionRequest, PatchRequest, RevisionRequest, KnowledgePackSectionUpdate
 from sigillum.domain.enums import Role
 from sigillum.infrastructure.database import models
 from sigillum.infrastructure.security import verify_password, create_access_token
 from sigillum.modules.content.extraction import sniff_file
 from sigillum.modules.knowledge.brand_pack import BrandPack
+from sigillum.modules.knowledge.store import KnowledgePackStore
 from sigillum.application.services.review_service import ReviewService, audit
 
 router=APIRouter()
 settings=get_settings()
-pack=BrandPack()
+pack_store=KnowledgePackStore(settings.brand_pack_path, settings.storage_root.parent / "brand_packs")
 
+def _active_pack(user: models.User) -> BrandPack:
+    try:
+        return pack_store.active_pack(user.tenant_id)
+    except (ValueError, OSError, RuntimeError, KeyError) as exc:
+        raise HTTPException(503, detail={"code": "BRAND_PACK_UNAVAILABLE", "message": "The active Brand Knowledge Pack could not be loaded."}) from exc
 
 def _ensure_submission_access(user: models.User, submission: models.Submission) -> None:
     """Tenant boundary plus creator ownership; reviewer roles can inspect assigned workspace data."""
@@ -39,7 +45,90 @@ def me(user: CurrentUser):
 
 @router.get("/brands/current")
 def current_brand(user: CurrentUser):
-    return {"brand":pack.brand,"pack_version":pack.version(),"policies":len(pack.policies),"facts":len(pack.facts)}
+    active_pack = _active_pack(user)
+    metadata = pack_store.active_metadata(user.tenant_id)
+    return {
+        "brand": active_pack.brand,
+        "pack_version": active_pack.version(),
+        "pack_version_id": metadata["version_id"],
+        "knowledge_pack_hash": metadata["fingerprint"],
+        "policies": len(active_pack.policies),
+        "facts": len(active_pack.facts),
+    }
+
+
+@router.get("/brands/current/management")
+def brand_management(user=Depends(require_roles(Role.BRAND_OWNER, Role.REVIEWER, Role.ADMINISTRATOR))):
+    active_pack = _active_pack(user)
+    metadata = pack_store.active_metadata(user.tenant_id)
+    return {
+        "brand": active_pack.brand,
+        "snapshot": active_pack.snapshot(),
+        "active_version": metadata,
+        "versions": pack_store.list_versions(user.tenant_id),
+        "can_edit": user.role == Role.BRAND_OWNER.value,
+    }
+
+
+@router.get("/brands/current/versions")
+def brand_versions(user=Depends(require_roles(Role.BRAND_OWNER, Role.REVIEWER, Role.ADMINISTRATOR))):
+    return {"versions": pack_store.list_versions(user.tenant_id)}
+
+
+@router.post("/brands/current/drafts")
+def create_brand_draft(user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db)):
+    draft = pack_store.create_draft(user.tenant_id, user.id)
+    audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_DRAFT_CREATED", "brand_knowledge_draft", draft["draft_id"], {"base_version_id": draft["base_version_id"]})
+    db.commit()
+    return {"draft_id": draft["draft_id"], "base_version_id": draft["base_version_id"], "status": draft["status"], "snapshot": draft["snapshot"]}
+
+
+@router.get("/brands/current/drafts/{draft_id}")
+def get_brand_draft(draft_id: str, user=Depends(require_roles(Role.BRAND_OWNER))):
+    try:
+        draft = pack_store.get_draft(user.tenant_id, draft_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    return draft
+
+
+@router.put("/brands/current/drafts/{draft_id}/section")
+def update_brand_draft_section(draft_id: str, payload: KnowledgePackSectionUpdate, user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db)):
+    try:
+        draft = pack_store.update_section(user.tenant_id, draft_id, payload.section, payload.content, user.id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "INVALID_DRAFT_UPDATE", "message": str(exc)}) from exc
+    audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_DRAFT_SECTION_UPDATED", "brand_knowledge_draft", draft_id, {"section": payload.section})
+    db.commit()
+    return {"draft_id": draft["draft_id"], "status": draft["status"], "updated_at": draft["updated_at"], "section": payload.section}
+
+
+@router.post("/brands/current/drafts/{draft_id}/validate")
+def validate_brand_draft(draft_id: str, user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db)):
+    try:
+        result = pack_store.validate_draft(user.tenant_id, draft_id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_DRAFT_VALIDATED", "brand_knowledge_draft", draft_id, {"valid": result["valid"], "error_count": len(result["errors"])})
+    db.commit()
+    return result
+
+
+@router.post("/brands/current/drafts/{draft_id}/publish")
+def publish_brand_draft(draft_id: str, user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db)):
+    try:
+        metadata = pack_store.publish_draft(user.tenant_id, draft_id, user.id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    except RuntimeError as exc:
+        raise HTTPException(409, detail={"code": "STALE_KNOWLEDGE_DRAFT", "message": str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "KNOWLEDGE_PACK_NOT_PUBLISHABLE", "message": str(exc)}) from exc
+    audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_PACK_PUBLISHED", "brand_knowledge_pack", metadata["version_id"], metadata)
+    db.commit()
+    return metadata
 
 @router.get("/dashboard/summary")
 def dashboard(user: CurrentUser, db: DbSession):
@@ -51,7 +140,8 @@ def dashboard(user: CurrentUser, db: DbSession):
     open_reviews=db.scalar(select(func.count()).select_from(models.Submission).where(*scope,models.Submission.status=="NEEDS_REVIEW")) or 0
     approved=db.scalar(select(func.count()).select_from(models.Submission).where(*scope,models.Submission.status=="APPROVED")) or 0
     findings=db.scalar(select(func.count()).select_from(models.Finding).join(models.ReviewRun).join(models.Submission).where(*scope)) or 0
-    return {"submissions":total,"needs_review":open_reviews,"approved":approved,"findings":findings,"brand_name":pack.brand["brand_name"]}
+    active_pack = _active_pack(user)
+    return {"submissions":total,"needs_review":open_reviews,"approved":approved,"findings":findings,"brand_name":active_pack.brand["brand_name"]}
 
 @router.get("/submissions")
 def list_submissions(user: CurrentUser, db: DbSession):
@@ -67,8 +157,9 @@ def list_submissions(user: CurrentUser, db: DbSession):
 
 @router.post("/submissions")
 async def create_submission(user: CurrentUser, db: DbSession, file: UploadFile=File(...), title: str=Form("Untitled submission"), channel: str=Form("direct_web"), locale: str=Form("en-IN"), geography: str=Form("IN"), audience: str=Form("consumer"), offer_id: str=Form("OFFER-ORBITA-OCT-NOV-2026"), publication_at: str=Form(...)):
-    if channel not in pack.brand.get("channels",[]): raise HTTPException(422,detail={"code":"INVALID_CHANNEL","message":"Channel is not supported by the current Brand Knowledge Pack."})
-    if locale not in pack.brand.get("supported_locales",[]): raise HTTPException(422,detail={"code":"INVALID_LOCALE","message":"Locale is not supported by this demo pack."})
+    active_pack = _active_pack(user)
+    if channel not in active_pack.brand.get("channels",[]): raise HTTPException(422,detail={"code":"INVALID_CHANNEL","message":"Channel is not supported by the current Brand Knowledge Pack."})
+    if locale not in active_pack.brand.get("supported_locales",[]): raise HTTPException(422,detail={"code":"INVALID_LOCALE","message":"Locale is not supported by this demo pack."})
     data=await file.read(settings.max_upload_bytes+1)
     if len(data)>settings.max_upload_bytes: raise HTTPException(413,detail={"code":"UPLOAD_TOO_LARGE","message":f"Maximum file size is {settings.max_upload_bytes//1024//1024} MB."})
     try: mime=sniff_file(file.filename or "upload.txt",data)
@@ -76,9 +167,9 @@ async def create_submission(user: CurrentUser, db: DbSession, file: UploadFile=F
     try: when=datetime.fromisoformat(publication_at.replace("Z","+00:00"))
     except ValueError: raise HTTPException(422,detail={"code":"INVALID_PUBLICATION_DATE","message":"Use an ISO-8601 date/time with timezone."})
     if when.tzinfo is None: raise HTTPException(422,detail={"code":"TIMEZONE_REQUIRED","message":"Publication time must include a timezone."})
-    submission=models.Submission(tenant_id=user.tenant_id,brand_id=pack.brand["brand_id"],title=title.strip()[:240] or "Untitled submission",channel=channel,locale=locale,geography=geography,audience=audience,offer_id=offer_id or None,publication_at=when.isoformat(),created_by=user.id)
+    submission=models.Submission(tenant_id=user.tenant_id,brand_id=active_pack.brand["brand_id"],title=title.strip()[:240] or "Untitled submission",channel=channel,locale=locale,geography=geography,audience=audience,offer_id=offer_id or None,publication_at=when.isoformat(),created_by=user.id)
     db.add(submission); db.flush()
-    service=ReviewService(db,pack,settings.storage_root)
+    service=ReviewService(db,active_pack,settings.storage_root)
     try:
         version=service.create_version(submission,file.filename or "upload.txt",mime,data,user)
         review, findings=service.run_review(submission,version)
@@ -217,7 +308,7 @@ def resolve_finding(review_id: str, finding_id: str, reason: str = Form(...), us
         raise HTTPException(404, detail={"code":"NOT_FOUND", "message":"Finding not found."})
     submission=db.get(models.Submission,review.submission_id)
     _ensure_submission_access(user, submission)
-    from datetime import datetime, timezone
+    from datetime import datetime
     finding.status="RESOLVED"
     finding.resolution_note=reason.strip()
     finding.resolved_by=user.id
@@ -286,7 +377,7 @@ def accept_patch(patch_id: str, user: CurrentUser, db: DbSession):
         raise HTTPException(409,detail={"code":"PATCH_SPAN_MISMATCH","message":"The patch span no longer matches the finding quote."})
     revised=text[:patch.start_offset]+patch.replacement+text[patch.end_offset:]
     data=revised.encode("utf-8")
-    service=ReviewService(db,pack,settings.storage_root)
+    service=ReviewService(db,_active_pack(user),settings.storage_root)
     new_version=service.create_version(submission,version.filename,version.mime_type,data,user)
     new_review, findings=service.run_review(submission,new_version)
     patch.status="ACCEPTED"
@@ -315,7 +406,7 @@ async def upload_revision(
     except ValueError as exc:
         raise HTTPException(415, detail={"code": "INVALID_UPLOAD", "message": str(exc)}) from exc
     previous = db.get(models.ContentVersion, submission.current_version_id) if submission.current_version_id else None
-    service = ReviewService(db, pack, settings.storage_root)
+    service = ReviewService(db, _active_pack(user), settings.storage_root)
     try:
         version = service.create_version(submission, file.filename or "revision.txt", mime, data, user)
         review, findings = service.run_review(submission, version)
@@ -353,7 +444,7 @@ def create_revision(submission_id: str, payload: RevisionRequest, user: CurrentU
     data=payload.content.encode("utf-8")
     from sigillum.modules.content.extraction import sniff_file
     mime=sniff_file("revision.txt",data)
-    service=ReviewService(db,pack,settings.storage_root)
+    service=ReviewService(db,_active_pack(user),settings.storage_root)
     version=service.create_version(submission,"revision.txt",mime,data,user)
     review, findings=service.run_review(submission,version)
     audit(db,user.tenant_id,user.id,"CONTENT_REVISION_CREATED","content_version",version.id,{"previous_version_id":prior.id if prior else None,"change_summary":payload.change_summary,"sha256":version.sha256,"review_id":review.id})

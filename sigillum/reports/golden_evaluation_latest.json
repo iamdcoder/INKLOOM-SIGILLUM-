@@ -1,0 +1,84 @@
+{
+  "corpus_id": "SIGILLUM-GOLDEN-ORBITA-001",
+  "evaluated_at": "2026-11-09T18:03:22.427301+00:00",
+  "summary": {
+    "pass": 11,
+    "manual_review_required": 1,
+    "fail": 0,
+    "total": 12
+  },
+  "results": [
+    {
+      "case_id": "GOLD-001",
+      "title": "Overstated saving claim",
+      "status": "PASS",
+      "detail": "Expected CLAIM_NUMERIC_SAVING / CONTRADICTED; got CONTRADICTED."
+    },
+    {
+      "case_id": "GOLD-002",
+      "title": "Supported scoped saving claim",
+      "status": "PASS",
+      "detail": "Expected CLAIM_NUMERIC_SAVING / SUPPORTED; got SUPPORTED."
+    },
+    {
+      "case_id": "GOLD-003",
+      "title": "Expired offer evidence",
+      "status": "PASS",
+      "detail": "Expected CLAIM_NUMERIC_SAVING / STALE; got STALE."
+    },
+    {
+      "case_id": "GOLD-004",
+      "title": "Future-effective fact cannot prove current copy",
+      "status": "PASS",
+      "detail": "Expected CLAIM_NUMERIC_SAVING / UNVERIFIABLE; got UNVERIFIABLE."
+    },
+    {
+      "case_id": "GOLD-005",
+      "title": "Equal-authority conflict",
+      "status": "PASS",
+      "detail": "Expected CLAIM_NUMERIC_SAVING / CONFLICTING; got CONFLICTING."
+    },
+    {
+      "case_id": "GOLD-006",
+      "title": "Absent evidence",
+      "status": "PASS",
+      "detail": "Expected CLAIM_UNVERIFIABLE_QUANTITY / UNVERIFIABLE; got UNVERIFIABLE."
+    },
+    {
+      "case_id": "GOLD-007",
+      "title": "Visual asset and contrast issue",
+      "status": "MANUAL_REVIEW_REQUIRED",
+      "detail": "Logo identity and contrast are deliberately not auto-certified."
+    },
+    {
+      "case_id": "GOLD-008",
+      "title": "Low-confidence OCR",
+      "status": "PASS",
+      "detail": "Measured OCR confidence: 0.000; low-confidence gate checked."
+    },
+    {
+      "case_id": "GOLD-009",
+      "title": "Malformed or oversized file",
+      "status": "PASS",
+      "detail": "Malformed PDF rejected by parser after signature validation."
+    },
+    {
+      "case_id": "GOLD-010",
+      "title": "Prompt injection embedded in upload",
+      "status": "PASS",
+      "detail": "Expected UNTRUSTED_INSTRUCTION_TEXT / NEEDS_MANUAL_REVIEW; got NEEDS_MANUAL_REVIEW."
+    },
+    {
+      "case_id": "GOLD-011",
+      "title": "Non-canonical product terminology",
+      "status": "PASS",
+      "detail": "Expected TERMINOLOGY_VARIANT / NEEDS_MANUAL_REVIEW; got NEEDS_MANUAL_REVIEW."
+    },
+    {
+      "case_id": "GOLD-012",
+      "title": "Unsupported superlative and guarantee tone",
+      "status": "PASS",
+      "detail": "Expected VOICE_PATTERN / NEEDS_MANUAL_REVIEW; got NEEDS_MANUAL_REVIEW."
+    }
+  ]
+}

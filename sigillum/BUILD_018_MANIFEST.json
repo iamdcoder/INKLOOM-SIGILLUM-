@@ -1,0 +1,66 @@
+{
+  "build": "018",
+  "product": "Inkloom Sigillum",
+  "baseline": "Build 017",
+  "phase": "06",
+  "phase_name": "Document parsing, OCR and visual-region extraction",
+  "phase_implementation_status": "core_complete",
+  "external_operational_acceptance": "pending",
+  "database_migration_head": "20261109_0007",
+  "changes": [
+    "Searchable PDF page text extraction with stable line offsets and rotation-aware rendered-page pixel polygons",
+    "Bounded scanned-PDF OCR using configurable Tesseract language, maximum OCR pages, render DPI, maximum dimension and timeout",
+    "Explicit PDF extraction warnings for low confidence, empty OCR, OCR failure and scanned pages beyond the configured page cap",
+    "Authenticated PDF page preview endpoint with resource authorization, CLEAN scan gate and SHA-256 integrity verification",
+    "Review Workbench PDF page navigation and selectable source text/OCR polygon overlays",
+    "DOCX logical extraction preserving headings, paragraphs, runs, table rows/cells, headers and footers with character offsets",
+    "DOCX inline image dimensions and alt-text inventory without claiming rendered page coordinates or embedded-image OCR",
+    "Image OCR metadata includes EXIF-corrected dimensions, line/word polygons, extraction confidence, Tesseract language and engine version",
+    "Versioned 64-bit dHash candidate signal, descriptive palette inventory and policy-scoped palette comparison",
+    "Conservative local OCR-line contrast measurements with PASS, FAIL and UNMEASURABLE metadata and human review routing",
+    "Finding source-region resolution now prefers the most specific containing DOCX run/table-cell or visual line region",
+    "Phase 06 unit and integration regressions for rotated/searchable/scanned PDFs, DOCX offsets, visual metadata and page preview"
+  ],
+  "verification": {
+    "backend_tests_collected": 157,
+    "backend_tests_passed": 155,
+    "backend_tests_skipped": 2,
+    "backend_tests_failed": 0,
+    "latest_phase06_page_limit_test": "passed",
+    "skip_reasons": [
+      "PostgreSQL RLS enforcement (requires PostgreSQL CI service)",
+      "Concurrent version/publication locking (requires PostgreSQL CI service)"
+    ],
+    "python_compileall": "passed",
+    "sqlite_migration": "20261109_0007",
+    "schema_migration_required": false,
+    "golden_evaluation": {
+      "pass": 11,
+      "manual_review_required": 1,
+      "fail": 0,
+      "total": 12
+    },
+    "real_scanned_pdf_ocr_smoke": {
+      "status": "passed",
+      "extracted_text": "SAVES UP TO 40 PERCENT",
+      "mean_confidence": 0.956,
+      "engine": "local Tesseract",
+      "language": "eng"
+    },
+    "typescript_syntax_parse": "passed for 17 frontend .ts/.tsx files with zero syntax diagnostics",
+    "frontend_lint_typecheck_build": "not verified; local dependency installation incomplete and clean install attempt timed out",
+    "live_postgresql": "not run locally; PostgreSQL CI job configured",
+    "live_clamav": "not run locally; existing scanner tests cover injected states/protocol",
+    "live_s3_or_minio": "not run locally; existing adapter tests use fake S3 client",
+    "browser_e2e": "not run"
+  },
+  "limitations": [
+    "DOCX rendered page geometry is not implemented; logical character offsets are provided and no page position is fabricated",
+    "Embedded image pixels inside DOCX and independently placed images/logos inside otherwise searchable PDFs are not OCRed",
+    "Tesseract language support depends on the language data installed on the deployment host",
+    "PDF table extraction is best-effort metadata; canonical text mapping remains page line regions",
+    "Perceptual-hash similarity and palette checks are candidate signals and do not certify logo identity or brand fit",
+    "Local contrast is an OCR-line estimate and does not certify complete creative or WCAG conformance",
+    "PostgreSQL RLS/concurrency, live ClamAV, S3/MinIO, browser E2E and full frontend production build remain externally unverified"
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "build": "014",
+  "project": "Inkloom Sigillum",
+  "date": "2026-11-09",
+  "baseline_build": "013",
+  "delivery_type": "cumulative source snapshot",
+  "phase": "04",
+  "phase_name": "Brand Control Center and Knowledge Pack lifecycle",
+  "phase_status": "partial_not_signed_off",
+  "database_revision": "20261109_0004",
+  "database_migration_added": false,
+  "implemented": [
+    "Brand Owner-only PDF/DOCX Knowledge Pack source upload with signature and size validation",
+    "Private tenant+brand+draft source storage with original SHA-256",
+    "Fail-closed ClamAV TCP INSTREAM scanner states CLEAN, INFECTED, UNAVAILABLE and ERROR",
+    "Source extraction only after CLEAN scan with bounded text and logical-region manifest",
+    "Quarantined source scan retry, extraction inspection, download and approval gates",
+    "ClamAV scan gate and retry for uploaded PNG/JPEG/WebP Knowledge Pack assets",
+    "Generic JSON editor provenance and approval metadata protection",
+    "Automatic downgrade of edited approved records to draft",
+    "Immutable published Knowledge Pack version comparison with bounded and redacted diff values",
+    "Brand Control Center UI for source upload, scan retry/status, extraction inspection, download and version comparison",
+    "Optional Docker Compose ClamAV security profile and environment settings",
+    "Build 014 API, technical and phase-gate documentation"
+  ],
+  "verification": {
+    "backend_tests": "108 passed, 1 skipped, 0 failed (109 collected)",
+    "python_compile": "pass",
+    "sqlite_alembic_head": "20261109_0004",
+    "database_verifier": "16 required tables present",
+    "golden_evaluation": "11 PASS, 1 MANUAL_REVIEW_REQUIRED, 0 FAIL (12 cases)",
+    "tsx_parser": "pass for apps/web/app/brand/page.tsx",
+    "frontend_lint_typecheck_build": "not completed; npm dependency installation timed out",
+    "live_clamav": "not tested",
+    "live_postgresql_rls_and_concurrency": "not tested",
+    "live_object_storage": "not tested",
+    "browser_e2e": "not tested"
+  },
+  "known_open_items": [
+    "Live non-superuser PostgreSQL RLS and concurrency CI",
+    "Live ClamAV daemon and signature-update validation",
+    "Live MinIO/AWS-compatible storage verification",
+    "Full frontend lint, typecheck and production build",
+    "Browser walkthrough and accessibility review",
+    "Owner-configurable asset use, dimensions, palette, clear-space, scope and validity policies",
+    "Guided field-level create/edit forms for all Knowledge Pack record types",
+    "Broader source/asset/voice/term conflict validation",
+    "Quarantine retention and object cleanup",
+    "Phase 04 acceptance gate and sign-off"
+  ],
+  "archive_excludes": [
+    ".git",
+    ".env and real secret files",
+    "local databases and private uploaded originals under data/",
+    ".venv and other virtual environments",
+    "node_modules and frontend build caches",
+    "Python bytecode and test caches"
+  ]
+}

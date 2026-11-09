@@ -1,0 +1,16 @@
+﻿risk_id,risk,likelihood,impact,priority,mitigation,owner,status
+RISK-001,Scope growth delays the Core vertical slice,High,High,Critical,Gate every phase; defer Advanced/Stretch until Core end-to-end path passes.,Project owner,Open
+RISK-002,LLM produces plausible but unsupported factual explanations,High,Critical,Critical,Approved-source-only evidence; deterministic adjudication; UNVERIFIABLE abstention; golden tests.,Project owner,Open
+RISK-003,Temporal or scope metadata selects an inapplicable fact,Medium,Critical,High,"Explicit valid-time and scope fields; boundary tests for dates, regions, channels and products.",Project owner,Open
+RISK-004,Uploaded prompt injection changes worker behaviour,Medium,Critical,High,Treat upload strings as data; isolated prompts; read-only allowlisted tools; no execution of document instructions.,Project owner,Open
+RISK-005,"Cross-workspace data leakage through files, vectors or evidence",Medium,Critical,High,Default-deny authorization before retrieval; brand-scoped repositories; negative access tests; RLS defence-in-depth.,Project owner,Open
+RISK-006,OCR/parser misses text or gives misleading coordinates,High,High,High,Store extraction confidence and warnings; preserve source; manual inspection route; parser regression fixtures.,Project owner,Open
+RISK-007,Provider outage or rate limit blocks review,Medium,High,High,"Deterministic/mock path, bounded retries, timeout budgets and explicit PROVIDER_UNAVAILABLE state.",Project owner,Open
+RISK-008,Duplicate job execution creates duplicate findings,Medium,High,High,"Idempotency keys, unique constraints, leases and worker-restart tests.",Project owner,Open
+RISK-009,Patch offsets are applied to changed content,Medium,Critical,High,Bind patch to base hash and offsets; reject stale patch; create new immutable version.,Project owner,Open
+RISK-010,UI displays APPROVED while backend is pending or failed,Medium,Critical,High,Backend-owned state only; typed state machine; frontend never infers approval.,Project owner,Open
+RISK-011,Synthetic demo data is mistaken for real brand evidence,Low,High,Medium,"Clearly label ORBITA corpus as fictional and test-only in UI, fixtures and demo script.",Project owner,Open
+RISK-012,Unverified event rules invalidate reuse or external service choices,Medium,Critical,High,Complete event integrity checklist against official rules before submission; retain source/date evidence.,Project owner,Open
+RISK-013,Provider terms or licence do not permit intended data processing,Medium,Critical,High,Provider register and dependency licence inventory; do not activate unverified provider.,Project owner,Open
+RISK-014,Historical approval becomes uninterpretable after policy/model changes,Medium,High,High,"Version all content, pack, policy, model, prompt and configuration context; immutable audit receipt.",Project owner,Open
+RISK-015,"Logs expose raw content, source snippets, prompts or storage credentials",Medium,Critical,High,Structured metadata-only logs; secret scanning; redaction tests; scoped short-lived file grants.,Project owner,Open

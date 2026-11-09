@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "locale": "en-IN",
+  "voice_traits": [
+    "clear",
+    "calm",
+    "confident without exaggeration",
+    "specific"
+  ],
+  "approved_examples": [
+    {
+      "example_id": "VOICE-001",
+      "text": "Designed for clearer everyday air, with details you can verify.",
+      "labels": [
+        "clear",
+        "measured"
+      ]
+    },
+    {
+      "example_id": "VOICE-002",
+      "text": "Explore the ORBITA Air One offer, available on eligible orders through 30 November 2026.",
+      "labels": [
+        "specific",
+        "non-exaggerated"
+      ]
+    }
+  ],
+  "disallowed_patterns": [
+    {
+      "pattern": "world's best",
+      "reason": "Unsubstantiated superlative",
+      "severity": "review_required"
+    },
+    {
+      "pattern": "guaranteed results",
+      "reason": "Absolute guarantee not approved",
+      "severity": "blocking"
+    }
+  ],
+  "limitation": "Voice analysis is a bounded editorial signal, not an objective truth score or approval decision."
+}

@@ -1,0 +1,55 @@
+{
+  "build": "011",
+  "baseline": "Build 010 (cumulative; assumes previous handoff applied)",
+  "phase": "03 \u2014 Identity, workspace boundaries and permissions",
+  "backend_tests": {
+    "collected": 85,
+    "passed": 84,
+    "failed": 0,
+    "skipped": 1,
+    "environment": "SQLite"
+  },
+  "python_compileall": "PASS",
+  "fresh_sqlite_migration": {
+    "status": "current",
+    "revision": "20261109_0003",
+    "missing_tables": []
+  },
+  "build010_database_upgrade": {
+    "source": "copy of Build 010 SQLite database",
+    "starting_revision": "20261109_0002",
+    "ending_revision": "20261109_0003",
+    "users": 6,
+    "tenants": 2,
+    "brands": 2,
+    "memberships": 6,
+    "result": "PASS"
+  },
+  "multibrand_backfill": {
+    "fixture": "synthetic multi-brand Build 010 migration fixture",
+    "creator_with_history": [
+      "brand_orbita_demo",
+      "brand_other_demo"
+    ],
+    "reviewer_with_one_brand_history": [
+      "brand_orbita_demo"
+    ],
+    "unassociated_legacy_account": [],
+    "result": "PASS"
+  },
+  "golden_evaluation": {
+    "pass": 11,
+    "manual_review_required": 1,
+    "fail": 0,
+    "total": 12,
+    "note": "Synthetic deterministic regression only; not a general accuracy estimate."
+  },
+  "ci_yaml_parse": "PASS",
+  "changed_frontend_ts_tsx_syntax_transpilation": "PASS",
+  "not_verified": {
+    "postgresql_runtime_rls": "No PostgreSQL server available in authoring environment; postgres CI job configured but hosted result not observed.",
+    "frontend_lint_typecheck_production_build": "npm ci timed out; syntax-only transpilation does not replace dependency-aware typecheck or Next.js build.",
+    "live_s3_minio": "Build 009 limitation; no live S3-compatible server verification claimed."
+  },
+  "phase_gate": "PARTIALLY COMPLETE \u2014 do not sign off until hosted PostgreSQL RLS CI and Build 011 frontend gates pass."
+}

@@ -1,0 +1,57 @@
+{
+  "build": "017",
+  "product": "Inkloom Sigillum",
+  "baseline": "Build 016",
+  "phase": "05",
+  "phase_name": "Secure submission, storage and immutable content versions",
+  "phase_implementation_status": "complete",
+  "external_operational_acceptance": "pending",
+  "database_migration_head": "20261109_0007",
+  "changes": [
+    "Guided resumable submission drafts with publication context, update, resume and cancellation",
+    "Creator and Agency role enforcement for submission and revision actions",
+    "PDF, DOCX, TXT, PNG and JPG/JPEG server-side signature, container, MIME and resource-limit validation",
+    "Fail-closed ClamAV scanning before document extraction and durable storage",
+    "SHA-256 duplicate checks and idempotent staged upload retries",
+    "Immutable local filesystem writes and conditional S3-compatible object creation",
+    "Content-version scan, retention and parent-version metadata",
+    "Transactional ReviewRun context and durable ReviewJob outbox row for each successful content version",
+    "Authenticated hash-verified download gate for CLEAN originals",
+    "Phase 05 integration and unit regressions for supported files, role boundaries, scanner failures, retries and storage immutability"
+  ],
+  "verification": {
+    "backend_tests_collected": 148,
+    "backend_tests_passed": 146,
+    "backend_tests_skipped": 2,
+    "backend_tests_failed": 0,
+    "skip_reasons": [
+      "PostgreSQL RLS enforcement (requires PostgreSQL CI service)",
+      "Concurrent version/publication locking (requires PostgreSQL CI service)"
+    ],
+    "python_compileall": "passed",
+    "sqlite_migration": "20261109_0007",
+    "required_sqlite_tables_missing": 0,
+    "row_level_security": "not_applicable_to_sqlite",
+    "golden_evaluation": {
+      "pass": 11,
+      "manual_review_required": 1,
+      "fail": 0,
+      "total": 12
+    },
+    "typescript_syntax_parse": "passed for 17 frontend .ts/.tsx files with zero syntax diagnostics",
+    "frontend_lint_typecheck_build": "not verified; local node_modules incomplete and missing type definitions",
+    "live_postgresql": "not run locally; PostgreSQL CI job configured",
+    "live_clamav": "not run locally; integration tests inject scanner states and protocol tests are offline",
+    "live_s3_or_minio": "not run locally; S3 conditional writes covered by fake-client tests",
+    "browser_e2e": "not run"
+  },
+  "limitations": [
+    "Infected upload bytes are rejected before object-store persistence; no separate malware-binary quarantine bucket is implemented",
+    "ReviewJob is transactionally recorded but review execution remains inline; worker leases/checkpoints/replay belong to Phase 11",
+    "Retention expiry is recorded but no automatic purge or storage-orphan reconciliation job is implemented",
+    "PostgreSQL RLS and concurrent version allocation require live PostgreSQL CI evidence",
+    "Live ClamAV daemon/signature readiness and full frontend lint/typecheck/build remain externally unverified",
+    "Browser drag/drop/progress/reload/abort interactions require browser E2E verification",
+    "Scanned-PDF OCR and embedded PDF/DOCX visual-region extraction are Phase 06 work"
+  ]
+}

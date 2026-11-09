@@ -1,0 +1,60 @@
+{
+  "project": "Inkloom Sigillum",
+  "build": "011",
+  "base_build": "010",
+  "cumulative_source_snapshot": true,
+  "date": "2026-11-09",
+  "phase": "03 — Identity, workspace boundaries and permissions",
+  "phase_gate": "PARTIALLY COMPLETE — PostgreSQL RLS runtime and frontend lint/typecheck/build remain pending",
+  "migration_head": "20261109_0003",
+  "major_additions": [
+    "Tenant, Brand, Membership and UserSession persistence",
+    "Per-request membership-authoritative authorization",
+    "Multi-workspace login selection and context switching",
+    "Server-side session revocation and session-bound file grants",
+    "Creator and Agency own-submission restriction",
+    "Brand Owner and Administrator membership management",
+    "Last-active-administrator guard with per-brand mutation serialization",
+    "PostgreSQL FORCE RLS policies with command-specific membership policy rules",
+    "Non-superuser PostgreSQL 17 + pgvector CI job",
+    "Workspace selector and Workspace Access frontend pages"
+  ],
+  "validation": {
+    "backend_tests": {
+      "collected": 85,
+      "passed": 84,
+      "failed": 0,
+      "skipped": 1,
+      "database": "SQLite",
+      "skip_reason": "PostgreSQL-only RLS runtime integration test"
+    },
+    "python_compileall": "PASS",
+    "fresh_sqlite_migration": "PASS — 20261109_0003",
+    "build010_database_upgrade": "PASS — 20261109_0002 to 20261109_0003",
+    "least_privilege_multibrand_backfill": "PASS",
+    "database_verifier": "PASS — all twelve mapped tables present; SQLite reports RLS not applicable",
+    "golden_evaluation": {
+      "pass": 11,
+      "manual_review_required": 1,
+      "fail": 0,
+      "total": 12
+    },
+    "ci_yaml_parse": "PASS",
+    "frontend_syntax_transpilation": "PASS — syntax only, not full typecheck/build"
+  },
+  "external_gates_pending": [
+    "PostgreSQL 17 + pgvector CI run with NOBYPASSRLS application role",
+    "Build 011 frontend npm run lint",
+    "Build 011 frontend npm run typecheck",
+    "Build 011 frontend npm run build"
+  ],
+  "excluded_from_archive": [
+    ".git",
+    ".env and local secret files",
+    "data/ including local databases and uploaded originals",
+    ".venv",
+    "node_modules",
+    "build caches and Python bytecode"
+  ],
+  "disclosure": "Significant ChatGPT assistance used for coding, debugging and documentation; participant must personally review and accurately disclose contributions."
+}

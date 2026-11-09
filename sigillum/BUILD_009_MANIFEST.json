@@ -1,0 +1,38 @@
+{
+  "build": "009",
+  "name": "Private Object Storage Boundary and Integrity-Checked Downloads",
+  "base_build": "008",
+  "date": "2026-11-09",
+  "scope": [
+    "introduce an ObjectStorage port for original content binaries",
+    "retain the private local filesystem implementation with atomic writes, restrictive permissions and safe key validation",
+    "add an opt-in boto3 S3-compatible object storage adapter with endpoint, bucket, region and credential configuration",
+    "route immutable source-version writes through the storage port",
+    "serve originals only through an authenticated API endpoint and recompute SHA-256 before returning bytes",
+    "map storage outages to explicit STORAGE_UNAVAILABLE states rather than parse failures",
+    "report database, storage and brand pack readiness separately",
+    "add offline adapter tests, upload/download integrity integration tests and outage state tests",
+    "update phase gate, architecture, setup and AI/provider disclosure records"
+  ],
+  "validation": {
+    "storage_unit_tests": "14 passed",
+    "backend_unit_integration_tests": "66 passed in 7.18 seconds",
+    "python_compileall": "passed",
+    "golden_evaluation": "11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL",
+    "live_s3_minio": "not run; offline fake-client tests only",
+    "postgres_pgvector": "not run; no live database service available",
+    "frontend_lint_typecheck_build": "not rerun; frontend source unchanged in Build 009",
+    "live_http_vertical_slice_smoke": "9 checks passed against fresh isolated SQLite database and local storage",
+    "ruff_lint": "not run; Ruff is not installed in the authoring environment"
+  },
+  "phase_status": {
+    "phase_02": "IN_PROGRESS",
+    "phase_05": "PARTIAL; content writes and authenticated reads now use storage port"
+  },
+  "limitations": [
+    "SQLite and local filesystem remain the tested default runtime configuration",
+    "the S3 adapter is wired but has not been tested against a live MinIO or AWS endpoint",
+    "production bucket provisioning, provider encryption, retention, backup, malware scanning and deletion lifecycle are not provided",
+    "PostgreSQL/pgvector integration, durable jobs, LangGraph checkpoints, tenant RLS, OCR/document multimodal improvements and later review/governance phases remain open"
+  ]
+}

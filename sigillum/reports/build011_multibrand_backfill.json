@@ -1,0 +1,12 @@
+{
+  "fixture": "synthetic multi-brand Build 010 migration fixture",
+  "creator_with_history": [
+    "brand_orbita_demo",
+    "brand_other_demo"
+  ],
+  "reviewer_with_one_brand_history": [
+    "brand_orbita_demo"
+  ],
+  "unassociated_legacy_account": [],
+  "result": "PASS"
+}

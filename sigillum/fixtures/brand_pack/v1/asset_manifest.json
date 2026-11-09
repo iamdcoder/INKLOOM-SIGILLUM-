@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "approved_assets": [
+    {
+      "asset_id": "ASSET-ORBITA-LOGO-001",
+      "name": "ORBITA primary wordmark",
+      "kind": "logo",
+      "file_path": "assets/orbita_primary_logo.svg",
+      "version": 1,
+      "status": "approved",
+      "valid_from": "2026-10-01T00:00:00+05:30",
+      "valid_until": null,
+      "notes": "Synthetic demo vector asset; create a matching test image in the fixture-generation step."
+    }
+  ],
+  "known_non_approved_test_assets": [
+    {
+      "asset_id": "ASSET-ORBITA-OLD-LOGO-TEST",
+      "name": "ORBITA legacy wordmark (test only)",
+      "kind": "logo",
+      "status": "not_approved",
+      "notes": "Deliberately non-approved near-match for golden test cases."
+    }
+  ]
+}

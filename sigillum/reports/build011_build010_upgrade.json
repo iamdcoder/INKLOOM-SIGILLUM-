@@ -1,0 +1,10 @@
+{
+  "source": "copy of Build 010 SQLite database",
+  "starting_revision": "20261109_0002",
+  "ending_revision": "20261109_0003",
+  "users": 6,
+  "tenants": 2,
+  "brands": 2,
+  "memberships": 6,
+  "result": "PASS"
+}

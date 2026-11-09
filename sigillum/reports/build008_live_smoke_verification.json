@@ -1,0 +1,24 @@
+{
+  "base_url": "http://127.0.0.1:8001",
+  "checks": [
+    "API readiness",
+    "Creator and reviewer authentication",
+    "Upload, immutable v1 and source-linked CONTRADICTED finding",
+    "Human approval correctly blocked while the blocking finding is open",
+    "Hash-bound correction created immutable v2 and re-ran verification",
+    "Reviewer approved the exact corrected content hash",
+    "Version history reconstructs v1 and v2",
+    "Audit trail contains submission, patch and approval events"
+  ],
+  "submission_id": "367d8e9d-b1fb-4574-969d-9ed0d8248d5a",
+  "initial_review_id": "8f728034-2ca3-47c0-bfb4-cc4fc1b00d3c",
+  "revised_review_id": "8bf8350d-686b-4a31-9730-b9cc9e34d77f",
+  "result": "PASS",
+  "initial_sha256": "cbf133a6140ec62978da09e0c737467d6cc82f09ee35e9dc416baa0fd90616ab",
+  "approved_sha256": "3a8272a77105d534c1a670daa0820eb5b03e42c05393ee2f039c1a8dea50762a",
+  "submission_status": "APPROVED",
+  "checks_passed": 8,
+  "build": "008",
+  "database": "fresh isolated SQLite database",
+  "note": "Controlled synthetic smoke test; not a browser E2E test or external accuracy validation."
+}

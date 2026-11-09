@@ -1,0 +1,30 @@
+SIGILLUM GOLDEN EVALUATION | SIGILLUM-GOLDEN-ORBITA-001
+----------------------------------------------------------------------------------------
+GOLD-001 PASS                     Overstated saving claim
+         Expected CLAIM_NUMERIC_SAVING / CONTRADICTED; got CONTRADICTED.
+GOLD-002 PASS                     Supported scoped saving claim
+         Expected CLAIM_NUMERIC_SAVING / SUPPORTED; got SUPPORTED.
+GOLD-003 PASS                     Expired offer evidence
+         Expected CLAIM_NUMERIC_SAVING / STALE; got STALE.
+GOLD-004 PASS                     Future-effective fact cannot prove current copy
+         Expected CLAIM_NUMERIC_SAVING / UNVERIFIABLE; got UNVERIFIABLE.
+GOLD-005 PASS                     Equal-authority conflict
+         Expected CLAIM_NUMERIC_SAVING / CONFLICTING; got CONFLICTING.
+GOLD-006 PASS                     Absent evidence
+         Expected CLAIM_UNVERIFIABLE_QUANTITY / UNVERIFIABLE; got UNVERIFIABLE.
+GOLD-007 MANUAL_REVIEW_REQUIRED   Visual asset and contrast issue
+         Logo identity and contrast are deliberately not auto-certified.
+GOLD-008 PASS                     Low-confidence OCR
+         Measured OCR confidence: 0.000; low-confidence gate checked.
+GOLD-009 PASS                     Malformed or oversized file
+         Malformed PDF rejected by parser after signature validation.
+GOLD-010 PASS                     Prompt injection embedded in upload
+         Expected UNTRUSTED_INSTRUCTION_TEXT / NEEDS_MANUAL_REVIEW; got NEEDS_MANUAL_REVIEW.
+GOLD-011 PASS                     Non-canonical product terminology
+         Expected TERMINOLOGY_VARIANT / NEEDS_MANUAL_REVIEW; got NEEDS_MANUAL_REVIEW.
+GOLD-012 PASS                     Unsupported superlative and guarantee tone
+         Expected VOICE_PATTERN / NEEDS_MANUAL_REVIEW; got NEEDS_MANUAL_REVIEW.
+----------------------------------------------------------------------------------------
+PASS: 11 | MANUAL REVIEW: 1 | FAIL: 0 | TOTAL: 12
+Synthetic deterministic regression only; not a claim of general model accuracy.
+Report written to: reports/golden_evaluation_latest.json

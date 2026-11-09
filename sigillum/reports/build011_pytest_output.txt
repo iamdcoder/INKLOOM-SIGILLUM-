@@ -1,0 +1,123 @@
+..........................s............................................. [ 84%]
+.............                                                            [100%]
+==================================== PASSES ====================================
+____________________________ test_health_endpoints _____________________________
+---------------------------- Captured stderr setup -----------------------------
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+_________ test_brand_owner_can_draft_validate_publish_and_version_pack _________
+---------------------------- Captured stderr setup -----------------------------
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+__________ test_membership_role_is_authoritative_not_legacy_user_role __________
+---------------------------- Captured stderr setup -----------------------------
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+________ test_alembic_upgrade_from_empty_sqlite_database_is_repeatable _________
+----------------------------- Captured stderr call -----------------------------
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 20261108_0001, Initial Sigillum schema.
+INFO  [alembic.runtime.migration] Running upgrade  -> 20261108_0001, Initial Sigillum schema.
+INFO  [alembic.runtime.migration] Running upgrade 20261108_0001 -> 20261109_0002, Install pgvector on PostgreSQL installations.
+INFO  [alembic.runtime.migration] Running upgrade 20261108_0001 -> 20261109_0002, Install pgvector on PostgreSQL installations.
+INFO  [alembic.runtime.migration] Running upgrade 20261109_0002 -> 20261109_0003, Workspace identity, brand memberships, revocable sessions and RLS.
+INFO  [alembic.runtime.migration] Running upgrade 20261109_0002 -> 20261109_0003, Workspace identity, brand memberships, revocable sessions and RLS.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+=========================== short test summary info ============================
+PASSED tests/integration/test_api.py::test_health_endpoints
+PASSED tests/integration/test_api.py::test_storage_outage_is_not_misreported_as_a_parse_failure
+PASSED tests/integration/test_api.py::test_uploaded_original_download_is_authenticated_and_hash_verified
+PASSED tests/integration/test_api.py::test_upload_review_and_role_gated_approval
+PASSED tests/integration/test_api.py::test_reviewer_cannot_approve_open_blocking_finding
+PASSED tests/integration/test_api.py::test_patch_creates_new_immutable_version_then_reviewer_can_approve
+PASSED tests/integration/test_api.py::test_submission_id_can_open_latest_review
+PASSED tests/integration/test_api.py::test_upload_rejects_mismatched_file_signature
+PASSED tests/integration/test_api.py::test_creator_cannot_read_another_creators_submission
+PASSED tests/integration/test_api.py::test_pdf_and_docx_upload_keep_claims_in_shared_review_pipeline
+PASSED tests/integration/test_api.py::test_uploaded_revision_creates_next_immutable_version
+PASSED tests/integration/test_api.py::test_image_review_requires_visual_inspection_before_human_approval
+PASSED tests/integration/test_api.py::test_review_history_binds_each_version_to_knowledge_snapshot_and_rejects_stale_decision
+PASSED tests/integration/test_api.py::test_creator_cannot_read_another_creators_version_history
+PASSED tests/integration/test_api.py::test_image_submission_returns_polygon_regions_and_measurement_status
+PASSED tests/integration/test_brand_management.py::test_brand_owner_can_draft_validate_publish_and_version_pack
+PASSED tests/integration/test_brand_management.py::test_only_brand_owner_can_mutate_knowledge_pack
+PASSED tests/integration/test_workspace_identity.py::test_membership_role_is_authoritative_not_legacy_user_role
+PASSED tests/integration/test_workspace_identity.py::test_session_is_server_revocable_and_logout_invalidates_token
+PASSED tests/integration/test_workspace_identity.py::test_multiple_workspace_memberships_require_explicit_selection
+PASSED tests/integration/test_workspace_identity.py::test_inactive_membership_invalidates_an_existing_session
+PASSED tests/integration/test_workspace_identity.py::test_cross_tenant_submission_and_file_grant_are_not_accessible
+PASSED tests/integration/test_workspace_identity.py::test_download_grant_expires_with_the_issuing_session
+PASSED tests/integration/test_workspace_identity.py::test_administrator_can_add_and_deactivate_brand_membership
+PASSED tests/integration/test_workspace_identity.py::test_brand_owner_cannot_grant_administrator_and_last_admin_is_protected
+PASSED tests/integration/test_workspace_identity.py::test_agency_contributor_is_scoped_to_submissions_they_created
+PASSED tests/integration/test_workspace_identity.py::test_switch_context_revokes_old_token_and_issues_new_membership_context
+PASSED tests/unit/test_database_lifecycle.py::test_sqlite_engine_creates_parent_directory_and_enforces_foreign_keys
+PASSED tests/unit/test_database_lifecycle.py::test_postgresql_shorthand_uses_psycopg_three_driver
+PASSED tests/unit/test_database_lifecycle.py::test_unknown_database_backend_fails_closed
+PASSED tests/unit/test_database_lifecycle.py::test_alembic_upgrade_from_empty_sqlite_database_is_repeatable
+PASSED tests/unit/test_database_lifecycle.py::test_readiness_reports_unmigrated_database_as_pending
+PASSED tests/unit/test_database_lifecycle.py::test_invalid_database_pool_configuration_is_rejected
+PASSED tests/unit/test_database_lifecycle.py::test_postgresql_rls_verifier_accepts_command_specific_membership_policies
+PASSED tests/unit/test_database_lifecycle.py::test_postgresql_rls_verifier_rejects_missing_membership_policy
+PASSED tests/unit/test_knowledge_pack_store.py::test_store_initializes_seed_as_immutable_v1
+PASSED tests/unit/test_knowledge_pack_store.py::test_publish_creates_a_new_immutable_version_and_preserves_previous
+PASSED tests/unit/test_knowledge_pack_store.py::test_invalid_duplicate_ids_cannot_be_published
+PASSED tests/unit/test_knowledge_pack_store.py::test_stale_draft_cannot_overwrite_a_newer_publication
+PASSED tests/unit/test_knowledge_pack_store.py::test_asset_manifest_rejects_cross_platform_path_traversal
+PASSED tests/unit/test_knowledge_pack_store.py::test_invalid_fact_temporal_intervals_cannot_be_published
+PASSED tests/unit/test_storage.py::test_local_storage_round_trip_and_private_permissions
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[]
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[/absolute.txt]
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[../escape.txt]
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[one/../escape.txt]
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[one//empty.txt]
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[one\\\\windows.txt]
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[C:/drive.txt]
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[one/./dot.txt]
+PASSED tests/unit/test_storage.py::test_storage_rejects_unsafe_object_keys[one/zero\\x00byte.txt]
+PASSED tests/unit/test_storage.py::test_local_storage_does_not_follow_symlink_outside_root
+PASSED tests/unit/test_storage.py::test_s3_adapter_round_trip_and_missing_key
+PASSED tests/unit/test_storage.py::test_s3_adapter_can_bootstrap_missing_development_bucket
+PASSED tests/unit/test_storage.py::test_s3_adapter_maps_provider_failure_to_storage_unavailable
+PASSED tests/unit/test_temporal_retrieval.py::test_temporal_assessment_checks_valid_time_and_record_time_separately
+PASSED tests/unit/test_temporal_retrieval.py::test_fact_recorded_after_review_as_of_is_not_eligible
+PASSED tests/unit/test_temporal_retrieval.py::test_fact_no_longer_recorded_at_review_is_not_eligible
+PASSED tests/unit/test_temporal_retrieval.py::test_invalid_temporal_interval_fails_closed
+PASSED tests/unit/test_temporal_retrieval.py::test_retrieval_applies_scope_and_returns_reproducible_rrf_trace
+PASSED tests/unit/test_temporal_retrieval.py::test_retrieval_excludes_unapproved_and_unknown_scope_facts
+PASSED tests/unit/test_temporal_retrieval.py::test_engine_does_not_use_fact_not_recorded_at_review_time
+PASSED tests/unit/test_temporal_retrieval.py::test_engine_exposes_retrieval_and_bitemporal_provenance_for_supported_claim
+PASSED tests/unit/test_temporal_retrieval.py::test_higher_source_precedence_wins_but_equal_top_precedence_conflicts
+PASSED tests/unit/test_verification_engine.py::test_overstated_claim_is_contradicted
+PASSED tests/unit/test_verification_engine.py::test_exact_claim_is_supported
+PASSED tests/unit/test_verification_engine.py::test_wrong_channel_abstains
+PASSED tests/unit/test_verification_engine.py::test_expired_fact_is_stale
+PASSED tests/unit/test_verification_engine.py::test_terminology_variant_is_flagged
+PASSED tests/unit/test_verification_engine.py::test_low_ocr_confidence_adds_manual_review
+PASSED tests/unit/test_verification_engine.py::test_missing_required_scope_field_does_not_use_scoped_fact
+PASSED tests/unit/test_verification_engine.py::test_future_effective_fact_is_not_yet_valid
+PASSED tests/unit/test_verification_engine.py::test_equal_authority_conflict_is_not_resolved_by_source_order
+PASSED tests/unit/test_verification_engine.py::test_unmatched_numeric_duration_abstains
+PASSED tests/unit/test_verification_engine.py::test_instruction_like_upload_text_is_flagged_but_not_executed
+PASSED tests/unit/test_verification_engine.py::test_worlds_best_with_apostrophe_is_flagged
+PASSED tests/unit/test_verification_engine.py::test_image_fixture_measures_as_low_confidence_ocr
+PASSED tests/unit/test_verification_engine.py::test_pdf_and_docx_text_extraction_are_supported
+PASSED tests/unit/test_verification_engine.py::test_brand_pack_fingerprint_is_stable_and_covers_snapshot
+PASSED tests/unit/test_verification_engine.py::test_image_extraction_preserves_metadata_and_polygon_regions
+PASSED tests/unit/test_verification_engine.py::test_local_contrast_measurement_flags_low_contrast_as_candidate
+PASSED tests/unit/test_verification_engine.py::test_contrast_is_unmeasurable_without_an_approved_threshold
+PASSED tests/unit/test_verification_engine.py::test_txt_and_docx_extractors_create_logical_source_regions
+PASSED tests/unit/test_verification_engine.py::test_contrast_threshold_is_only_used_within_approved_channel_scope
+SKIPPED [1] tests/integration/test_workspace_identity.py:404: PostgreSQL Row Level Security is exercised by the PostgreSQL CI job.

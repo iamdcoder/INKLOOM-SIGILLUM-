@@ -1,0 +1,22 @@
+{
+  "base_url": "http://127.0.0.1:8877",
+  "checks": [
+    "API readiness",
+    "Creator and reviewer authentication",
+    "Upload, immutable v1 and source-linked CONTRADICTED finding",
+    "Authenticated original download passed SHA-256 verification",
+    "Human approval correctly blocked while the blocking finding is open",
+    "Hash-bound correction created immutable v2 and re-ran verification",
+    "Reviewer approved the exact corrected content hash",
+    "Version history reconstructs v1 and v2",
+    "Audit trail contains submission, patch and approval events"
+  ],
+  "submission_id": "2393ab40-6c2c-47ad-b6ee-d8b8f1932136",
+  "initial_review_id": "9cd954ef-f2c7-43b6-9e69-70dd91f07504",
+  "revised_review_id": "4f25ba7c-aa43-4011-8306-ea9508babdb6",
+  "result": "PASS",
+  "initial_sha256": "cbf133a6140ec62978da09e0c737467d6cc82f09ee35e9dc416baa0fd90616ab",
+  "approved_sha256": "3a8272a77105d534c1a670daa0820eb5b03e42c05393ee2f039c1a8dea50762a",
+  "submission_status": "APPROVED",
+  "checks_passed": 9
+}

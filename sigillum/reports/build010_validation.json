@@ -1,0 +1,53 @@
+{
+  "build": "010",
+  "base_build": "009",
+  "date": "2026-11-09",
+  "checks": {
+    "pytest": {
+      "status": "passed",
+      "count": 72,
+      "duration_seconds": 6.99,
+      "database": "SQLite/local"
+    },
+    "compileall": {
+      "status": "passed"
+    },
+    "database_verifier": {
+      "status": "passed",
+      "dialect": "sqlite",
+      "revision": "20261109_0002",
+      "missing_tables": []
+    },
+    "migration_from_empty_sqlite": {
+      "status": "passed",
+      "repeat_upgrade": "passed"
+    },
+    "sqlite_foreign_key_enforcement": {
+      "status": "passed"
+    },
+    "postgresql_url_normalisation": {
+      "status": "passed",
+      "driver": "postgresql+psycopg"
+    },
+    "ci_yaml_parse": {
+      "status": "passed",
+      "jobs": [
+        "backend",
+        "backend-postgres",
+        "frontend"
+      ]
+    },
+    "golden_evaluation": {
+      "pass": 11,
+      "manual_review_required": 1,
+      "fail": 0,
+      "total": 12
+    }
+  },
+  "not_run": {
+    "live_postgresql_pgvector": "No local PostgreSQL service; psycopg driver not installed in authoring runtime. CI service job configured; hosted run pending.",
+    "live_minio_or_aws": "No live S3-compatible endpoint available; offline fake-client tests remain.",
+    "ruff": "Ruff is not installed in authoring runtime.",
+    "frontend": "No frontend source changed in Build 010; no frontend rebuild performed."
+  }
+}

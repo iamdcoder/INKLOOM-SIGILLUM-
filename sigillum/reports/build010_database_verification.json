@@ -1,0 +1,26 @@
+{
+  "build": "010",
+  "checked_at": "2026-11-09",
+  "database_dialect": "sqlite",
+  "migration": {
+    "status": "current",
+    "current_revision": "20261109_0002",
+    "expected_revision": "20261109_0002",
+    "heads": [
+      "20261109_0002"
+    ]
+  },
+  "required_tables": [
+    "audit_events",
+    "content_versions",
+    "decisions",
+    "findings",
+    "patches",
+    "review_runs",
+    "submissions",
+    "users"
+  ],
+  "missing_tables": [],
+  "pgvector_extension": null,
+  "interpretation": "SQLite local verification; null pgvector field is expected because PostgreSQL was not the active dialect."
+}

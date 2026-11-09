@@ -1,0 +1,36 @@
+{
+  "build": "008",
+  "name": "Temporal Truth and Evidence Retrieval",
+  "base_build": "007",
+  "date": "2026-11-08",
+  "scope": [
+    "separate valid-time and record/system-time evaluation for approved facts",
+    "use persisted review creation timestamp as the knowledge as-of boundary",
+    "reject facts not yet recorded or no longer recorded at the review time",
+    "validate timezone-aware fact temporal metadata and non-inverted intervals before Knowledge Pack publication",
+    "approved-only and scope-aware candidate retrieval",
+    "deterministic lexical and structured rankings combined with Reciprocal Rank Fusion",
+    "apply source precedence after temporal and scope eligibility; preserve equal-top-precedence conflicts",
+    "expose temporal and retrieval provenance in the Review Workbench",
+    "add unit and integration regression coverage and phase status documentation"
+  ],
+  "validation": {
+    "backend_tests": "50 passed",
+    "python_compileall": "passed",
+    "golden_evaluation": "11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL",
+    "live_http_vertical_slice_smoke": "8 checks passed against fresh isolated SQLite database",
+    "frontend_tsx_syntax_transpilation": "0 diagnostics",
+    "frontend_lint_typecheck_build": "participant verification required after applying patch"
+  },
+  "phase_status": {
+    "phase_07": "PARTIALLY_IMPLEMENTED_TEMPORAL_RESOLUTION_BASELINE",
+    "phase_08": "PARTIALLY_IMPLEMENTED_LEXICAL_STRUCTURED_RRF_BASELINE"
+  },
+  "limitations": [
+    "vector search and pgvector are not configured; retrieval reports NOT_CONFIGURED",
+    "retrieval is limited to approved local Brand Knowledge Pack facts and deterministic claim patterns",
+    "full normalized bitemporal database records and temporal handling for every knowledge record family remain pending",
+    "cross-encoder reranking and Recall@5/MRR benchmark suite remain pending",
+    "local filesystem pack adapter and single demo workspace remain in use"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "database_dialect": "sqlite",
+  "migration": {
+    "status": "current",
+    "current_revision": "20261109_0003",
+    "expected_revision": "20261109_0003",
+    "heads": [
+      "20261109_0003"
+    ]
+  },
+  "required_tables": [
+    "audit_events",
+    "brands",
+    "content_versions",
+    "decisions",
+    "findings",
+    "memberships",
+    "patches",
+    "review_runs",
+    "submissions",
+    "tenants",
+    "user_sessions",
+    "users"
+  ],
+  "missing_tables": [],
+  "pgvector_extension": null,
+  "row_level_security": {
+    "status": "not_applicable",
+    "tables": []
+  }
+}

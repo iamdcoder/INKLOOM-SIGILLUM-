@@ -1,0 +1,28 @@
+{
+  "build": "006",
+  "name": "Visual Evidence Intelligence",
+  "base_build": "005",
+  "date": "2026-11-08",
+  "scope": [
+    "image metadata and dominant colour inventory",
+    "OCR line polygons and normalized coordinates",
+    "local contrast measurement with PASS/FAIL/UNMEASURABLE outcomes",
+    "TXT/DOCX/PDF logical source mapping",
+    "interactive image OCR overlays in Review Workbench",
+    "tests and Phase 06 status documentation"
+  ],
+  "validation": {
+    "backend_tests": "33 passed",
+    "python_compileall": "passed",
+    "frontend_tsx_syntax": "0 syntax diagnostics",
+    "frontend_lint_typecheck_build": "developer verification required"
+  },
+  "phase_06_status": "PARTIAL",
+  "limitations": [
+    "local contrast estimate requires human confirmation",
+    "palette is descriptive only",
+    "logo identity matching remains manual",
+    "scanned PDF OCR and rendered PDF polygons are pending",
+    "DOCX rendered page coordinates are pending"
+  ]
+}

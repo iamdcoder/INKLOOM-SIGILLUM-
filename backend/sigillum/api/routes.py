@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import difflib
 import json
 from io import BytesIO
 from hashlib import sha256
@@ -477,7 +478,11 @@ def update_brand_draft_section(draft_id: str, payload: KnowledgePackSectionUpdat
         raise HTTPException(422, detail={"code": "INVALID_DRAFT_UPDATE", "message": str(exc)}) from exc
     audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_DRAFT_SECTION_UPDATED", "brand_knowledge_draft", draft_id, {"section": payload.section}, brand_id=user.brand_id)
     db.commit()
-    return {"draft_id": draft["draft_id"], "status": draft["status"], "updated_at": draft["updated_at"], "section": payload.section}
+    return {
+        "draft_id": draft["draft_id"], "status": draft["status"],
+        "updated_at": draft["updated_at"], "section": payload.section,
+        "content": draft["snapshot"].get(payload.section),
+    }
 
 
 @router.post("/brands/current/drafts/{draft_id}/validate")
@@ -631,6 +636,217 @@ async def upload_brand_source_document(
           {"source_format": safe_extension, "scan_status": source["scan_status"], "extraction_status": source["extraction_status"], "file_sha256": file_digest}, brand_id=user.brand_id)
     db.commit()
     return {"source": source, "draft_id": draft_id, "draft_status": "DRAFT", "authoritative": False}
+
+
+@router.post("/brands/current/drafts/{draft_id}/sources/{source_id}/versions/upload")
+async def upload_replacement_brand_source_document(
+    draft_id: str,
+    source_id: str,
+    file: UploadFile = File(...),
+    valid_from: str | None = Form(default=None),
+    valid_until: str | None = Form(default=None),
+    user=Depends(require_roles(Role.BRAND_OWNER)),
+    db: Session = Depends(get_db),
+):
+    """Upload version N+1 of a source and supersede N only inside the draft."""
+    try:
+        draft = pack_store.get_draft(user.tenant_id, draft_id, user.brand_id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    source_rows = (draft.get("snapshot", {}).get("sources", {}) or {}).get("sources", [])
+    previous = next((item for item in source_rows if isinstance(item, dict) and item.get("source_id") == source_id), None)
+    if not previous:
+        raise HTTPException(404, detail={"code": "SOURCE_NOT_FOUND", "message": "Source version to replace was not found."})
+    if previous.get("status") == "superseded":
+        raise HTTPException(409, detail={"code": "SOURCE_ALREADY_SUPERSEDED", "message": "Replace the latest source version, not a superseded version."})
+    original_filename = Path(file.filename or "source-document").name[:240]
+    extension = Path(original_filename).suffix.lower()
+    if extension not in {".pdf", ".docx"}:
+        await file.close()
+        raise HTTPException(415, detail={"code": "SOURCE_DOCUMENT_TYPE_UNSUPPORTED", "message": "Replacement source uploads accept PDF and DOCX only."})
+    raw = await file.read(settings.max_upload_bytes + 1)
+    await file.close()
+    if not raw:
+        raise HTTPException(422, detail={"code": "EMPTY_SOURCE_DOCUMENT", "message": "The uploaded source document is empty."})
+    if len(raw) > settings.max_upload_bytes:
+        raise HTTPException(413, detail={"code": "SOURCE_DOCUMENT_TOO_LARGE", "message": "The uploaded source document exceeds the configured size limit."})
+    try:
+        mime_type = sniff_file(original_filename, raw)
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "INVALID_SOURCE_DOCUMENT", "message": str(exc)}) from exc
+    if mime_type not in {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}:
+        raise HTTPException(415, detail={"code": "SOURCE_DOCUMENT_TYPE_UNSUPPORTED", "message": "Replacement source uploads accept PDF and DOCX only."})
+    new_source_id = f"SRC-{uuid4().hex[:16].upper()}"
+    try:
+        version = int(previous.get("version", 1)) + 1
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(409, detail={"code": "SOURCE_VERSION_INVALID", "message": "The previous source version is invalid."}) from exc
+    digest = sha256(raw).hexdigest()
+    safe_extension = "pdf" if mime_type == "application/pdf" else "docx"
+    storage_key = f"brand-source-documents/{user.tenant_id}/{user.brand_id}/{draft_id}/{new_source_id}/original.{safe_extension}"
+    extraction_key = f"brand-source-extractions/{user.tenant_id}/{user.brand_id}/{draft_id}/{new_source_id}/extraction.json"
+    source = {
+        "source_id": new_source_id, "name": str(previous.get("name", "")),
+        "source_type": str(previous.get("source_type", "other")), "version": version,
+        "source_format": safe_extension, "original_filename": original_filename, "mime_type": mime_type,
+        "size_bytes": len(raw), "file_sha256": digest, "storage_key": storage_key,
+        "extraction_key": extraction_key, "reference_text": None, "sha256": None,
+        "owner_id": user.id, "uploaded_by": user.id, "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "status": "draft", "scan_status": "PENDING", "scan_engine": "clamav",
+        "scan_scanned_at": None, "scan_signature": None, "extraction_status": "PENDING_SCAN",
+        "extraction_warnings": [], "region_count": 0,
+        "valid_from": valid_from if valid_from is not None else previous.get("valid_from"),
+        "valid_until": valid_until if valid_until is not None else previous.get("valid_until"),
+        "created_by": user.id, "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    storage = get_storage(settings)
+    try:
+        storage.put_bytes(storage_key, raw, mime_type)
+        _scan_document_and_extract(source, raw, storage)
+        if source.get("scan_status") != "CLEAN" or source.get("extraction_status") != "COMPLETED":
+            cleanup_pending = []
+            for key in (storage_key, extraction_key):
+                try:
+                    storage.delete_bytes(key)
+                except StorageUnavailable:
+                    cleanup_pending.append(key)
+            audit(
+                db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_SOURCE_VERSION_REPLACEMENT_BLOCKED",
+                "brand_knowledge_source", source_id,
+                {"scan_status": source.get("scan_status"), "extraction_status": source.get("extraction_status"),
+                 "cleanup_pending": bool(cleanup_pending), "cleanup_item_count": len(cleanup_pending)},
+                brand_id=user.brand_id,
+            )
+            db.commit()
+            raise HTTPException(
+                423,
+                detail={
+                    "code": "SOURCE_REPLACEMENT_NOT_READY",
+                    "message": "The prior source version was left unchanged because the replacement did not pass malware scanning and complete extraction.",
+                    "scan_status": source.get("scan_status"),
+                    "extraction_status": source.get("extraction_status"),
+                    "cleanup_pending": bool(cleanup_pending),
+                },
+            )
+        updated = pack_store.append_source_version(user.tenant_id, user.brand_id, draft_id, source_id, source, user.id)
+    except FileNotFoundError:
+        storage.delete_bytes(storage_key)
+        raise HTTPException(404, detail={"code": "SOURCE_NOT_FOUND", "message": "Source version to replace was not found."})
+    except ValueError as exc:
+        storage.delete_bytes(storage_key)
+        if storage.exists(extraction_key):
+            storage.delete_bytes(extraction_key)
+        raise HTTPException(409, detail={"code": "SOURCE_REPLACEMENT_REJECTED", "message": str(exc)}) from exc
+    except StorageUnavailable as exc:
+        raise HTTPException(503, detail={"code": "STORAGE_UNAVAILABLE", "message": "Private source storage is unavailable."}) from exc
+    audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_SOURCE_VERSION_UPLOADED", "brand_knowledge_source", new_source_id,
+          {"supersedes_source_id": source_id, "version": version, "scan_status": source["scan_status"], "file_sha256": digest}, brand_id=user.brand_id)
+    db.commit()
+    new_draft = updated
+    return {"source": source, "superseded_source_id": source_id, "draft_id": draft_id, "draft_status": new_draft["status"], "authoritative": False}
+
+
+@router.get("/brands/current/drafts/{draft_id}/sources/{source_id}/versions/compare")
+def compare_brand_source_versions(
+    draft_id: str, source_id: str,
+    user=Depends(require_roles(Role.BRAND_OWNER)),
+):
+    """Compare a source version with its immediate predecessor/successor.
+
+    Only the authenticated Brand Owner can retrieve this source-derived diff;
+    storage keys and private extraction object references are never returned.
+    """
+    try:
+        draft = pack_store.get_draft(user.tenant_id, draft_id, user.brand_id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    rows = (draft.get("snapshot", {}).get("sources", {}) or {}).get("sources", [])
+    indexed = {str(item.get("source_id")): item for item in rows if isinstance(item, dict)}
+    selected = indexed.get(source_id)
+    if selected is None:
+        raise HTTPException(404, detail={"code": "SOURCE_NOT_FOUND", "message": "Draft source not found."})
+    if selected.get("supersedes_source_id"):
+        older = indexed.get(str(selected["supersedes_source_id"]))
+        newer = selected
+    elif selected.get("superseded_by"):
+        older = selected
+        newer = indexed.get(str(selected["superseded_by"]))
+    else:
+        raise HTTPException(409, detail={"code": "SOURCE_VERSION_COMPARISON_UNAVAILABLE", "message": "This source has no immediate replacement version in the current draft."})
+    if older is None or newer is None or str(newer.get("supersedes_source_id", "")) != str(older.get("source_id", "")):
+        raise HTTPException(409, detail={"code": "SOURCE_VERSION_LINEAGE_INVALID", "message": "The source version chain is incomplete and cannot be compared."})
+
+    before_text = str(older.get("reference_text") or "")[:20000]
+    after_text = str(newer.get("reference_text") or "")[:20000]
+    comparison_available = bool(before_text.strip() and after_text.strip())
+    diff_lines: list[str] = []
+    added_lines = removed_lines = 0
+    if comparison_available:
+        diff_lines = list(difflib.unified_diff(
+            before_text.splitlines(), after_text.splitlines(),
+            fromfile=f"{older.get('name', 'Source')} v{older.get('version', '?')}",
+            tofile=f"{newer.get('name', 'Source')} v{newer.get('version', '?')}",
+            lineterm="",
+        ))
+        added_lines = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
+        removed_lines = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+    safe_metadata_fields = ("source_id", "name", "source_type", "version", "status", "file_sha256", "sha256", "scan_status", "extraction_status", "valid_from", "valid_until", "region_count")
+    def safe_source(item: dict) -> dict:
+        return {key: item.get(key) for key in safe_metadata_fields if key in item}
+    return {
+        "draft_id": draft_id,
+        "from": safe_source(older),
+        "to": safe_source(newer),
+        "comparison_available": comparison_available,
+        "diff": "\n".join(diff_lines[:500])[:50000],
+        "diff_truncated": len(diff_lines) > 500 or sum(len(line) + 1 for line in diff_lines[:500]) > 50000,
+        "added_line_count": added_lines,
+        "removed_line_count": removed_lines,
+        "warnings": [] if comparison_available else ["SOURCE_TEXT_UNAVAILABLE: both versions need retained extracted/reference text for a textual comparison."],
+    }
+
+
+@router.delete("/brands/current/drafts/{draft_id}/sources/{source_id}")
+def delete_unpublished_brand_source(
+    draft_id: str, source_id: str,
+    user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db),
+):
+    """Delete an unapproved draft source and its private binary/extraction artefacts."""
+    try:
+        removed = pack_store.remove_unpublished_source(user.tenant_id, user.brand_id, draft_id, source_id, user.id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "SOURCE_NOT_FOUND", "message": "Draft source not found."})
+    except ValueError as exc:
+        raise HTTPException(409, detail={"code": "SOURCE_DELETE_REJECTED", "message": str(exc)}) from exc
+
+    storage_keys = [removed.get("storage_key"), removed.get("extraction_key")]
+    cleanup_pending = []
+    storage = get_storage(settings)
+    for key in storage_keys:
+        if not key:
+            continue
+        key = str(key)
+        allowed_prefixes = (
+            f"brand-source-documents/{user.tenant_id}/{user.brand_id}/{draft_id}/",
+            f"brand-source-extractions/{user.tenant_id}/{user.brand_id}/{draft_id}/",
+        )
+        if not key.startswith(allowed_prefixes):
+            cleanup_pending.append("untrusted-storage-reference")
+            continue
+        try:
+            storage.delete_bytes(key)
+        except StorageUnavailable:
+            cleanup_pending.append(key)
+
+    audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_SOURCE_DELETED", "brand_knowledge_source", source_id,
+          {"binary_cleanup_pending": bool(cleanup_pending), "cleanup_item_count": len(cleanup_pending)}, brand_id=user.brand_id)
+    if cleanup_pending:
+        # The source is no longer addressable from the draft. The audit event
+        # records that private object cleanup needs operator attention.
+        audit(db, user.tenant_id, user.id, "PRIVATE_OBJECT_CLEANUP_PENDING", "brand_knowledge_source", source_id,
+              {"storage_keys": cleanup_pending}, brand_id=user.brand_id)
+    db.commit()
+    return {"source_id": source_id, "deleted": True, "binary_cleanup_pending": bool(cleanup_pending)}
 
 
 @router.post("/brands/current/drafts/{draft_id}/sources/{source_id}/scan")

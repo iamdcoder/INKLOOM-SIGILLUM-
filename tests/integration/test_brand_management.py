@@ -714,6 +714,290 @@ def test_infected_uploaded_knowledge_source_is_never_extracted_or_downloadable(c
         api_routes.scan_upload_bytes = old_scanner
 
 
+def test_owner_guided_fact_policy_term_and_voice_records_complete_the_pack_lifecycle(client):
+    tenant_id = f"tenant_guided_records_{uuid4().hex[:10]}"
+    owner_email = f"guided.records.{uuid4().hex[:10]}@orbita.demo"
+    _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+    created = client.post("/api/v1/brands/current/drafts", headers=headers)
+    assert created.status_code == 200, created.text
+    draft_id = created.json()["draft_id"]
+
+    source_text = "Official ORBITA test source: the Air One warranty lasts 24 months from retail purchase."
+    source_response = client.post(
+        f"/api/v1/brands/current/drafts/{draft_id}/sources",
+        headers=headers,
+        json={
+            "name": "Guided form evidence", "source_type": "product_specification",
+            "version": 1, "reference_text": source_text,
+        },
+    )
+    assert source_response.status_code == 200, source_response.text
+    source = source_response.json()["source"]
+    source_id = source["source_id"]
+    source_approved = client.post(
+        f"/api/v1/brands/current/drafts/{draft_id}/records/source/{source_id}/decision",
+        headers=headers, json={"status": "approved", "reason": "Verified official specification."},
+    )
+    assert source_approved.status_code == 200, source_approved.text
+
+    fact = {
+        "fact_id": "FACT-GUIDED-001", "subject": "ORBITA Air One", "predicate": "warranty_duration",
+        "value": 24, "unit": "months", "qualifier": None, "denominator": "from retail purchase",
+        "offer_id": "GUIDED-TEST-OFFER", "geography": "IN", "channel": "direct_web",
+        "locale": "en-IN", "audience": "consumer",
+        "source_ref": {"source_id": source_id, "source_version": source["version"], "quote": "the Air One warranty lasts 24 months from retail purchase"},
+        "status": "draft",
+    }
+    draft = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+    saved_facts = client.put(
+        f"/api/v1/brands/current/drafts/{draft_id}/section", headers=headers,
+        json={"section": "facts", "content": [*draft["snapshot"]["facts"], fact]},
+    )
+    assert saved_facts.status_code == 200, saved_facts.text
+    fact_approval = client.post(
+        f"/api/v1/brands/current/drafts/{draft_id}/records/fact/{fact['fact_id']}/decision",
+        headers=headers, json={"status": "approved", "reason": "Source quote and qualifier checked."},
+    )
+    assert fact_approval.status_code == 200, fact_approval.text
+
+    draft = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+    policy = {
+        "policy_id": "POL-GUIDED-001", "name": "Guided warranty claim rule", "category": "claims",
+        "rule": "Warranty duration statements must match the currently approved product specification.",
+        "severity": "review_required", "required_action": "review",
+        "scope": {"channel": ["direct_web"], "locale": ["en-IN"], "geography": ["IN"]},
+        "status": "draft",
+    }
+    saved_policies = client.put(
+        f"/api/v1/brands/current/drafts/{draft_id}/section", headers=headers,
+        json={"section": "policies", "content": [*draft["snapshot"]["policies"], policy]},
+    )
+    assert saved_policies.status_code == 200, saved_policies.text
+    policy_approval_without_source = client.post(
+        f"/api/v1/brands/current/drafts/{draft_id}/records/policy/{policy['policy_id']}/decision",
+        headers=headers, json={"status": "approved", "reason": "Policy reviewed by the Brand Owner."},
+    )
+    assert policy_approval_without_source.status_code == 422
+    assert "POLICY_SOURCE_PROVENANCE_REQUIRED" in policy_approval_without_source.text
+
+    # A new policy cannot be approved until it names the exact approved source
+    # version and the clause quote is present in that source's retained text.
+    policy["source_ref"] = {
+        "source_id": source_id,
+        "source_version": source["version"],
+        "quote": "This excerpt is deliberately not present in the source.",
+    }
+    draft = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+    server_policy = next(item for item in draft["snapshot"]["policies"] if item.get("policy_id") == policy["policy_id"])
+    policy["source_provenance_required"] = server_policy["source_provenance_required"]
+    saved_policy_provenance = client.put(
+        f"/api/v1/brands/current/drafts/{draft_id}/section", headers=headers,
+        json={"section": "policies", "content": [
+            policy if item.get("policy_id") == policy["policy_id"] else item
+            for item in draft["snapshot"]["policies"]
+        ]},
+    )
+    assert saved_policy_provenance.status_code == 200, saved_policy_provenance.text
+    invalid_policy_approval = client.post(
+        f"/api/v1/brands/current/drafts/{draft_id}/records/policy/{policy['policy_id']}/decision",
+        headers=headers, json={"status": "approved", "reason": "Testing exact clause validation."},
+    )
+    assert invalid_policy_approval.status_code == 422
+    assert "POLICY_SOURCE_QUOTE_NOT_FOUND" in invalid_policy_approval.text
+
+    # The server-owned provenance requirement cannot be removed through JSON.
+    tampered_policy = {**policy, "source_provenance_required": False}
+    draft = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+    tamper_attempt = client.put(
+        f"/api/v1/brands/current/drafts/{draft_id}/section", headers=headers,
+        json={"section": "policies", "content": [
+            tampered_policy if item.get("policy_id") == policy["policy_id"] else item
+            for item in draft["snapshot"]["policies"]
+        ]},
+    )
+    assert tamper_attempt.status_code == 422
+
+    # Once the exact quote is corrected, the owner can approve the new policy.
+    policy["source_ref"]["quote"] = "the Air One warranty lasts 24 months from retail purchase"
+    draft = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+    saved_policy_provenance = client.put(
+        f"/api/v1/brands/current/drafts/{draft_id}/section", headers=headers,
+        json={"section": "policies", "content": [
+            policy if item.get("policy_id") == policy["policy_id"] else item
+            for item in draft["snapshot"]["policies"]
+        ]},
+    )
+    assert saved_policy_provenance.status_code == 200, saved_policy_provenance.text
+    policy_approval = client.post(
+        f"/api/v1/brands/current/drafts/{draft_id}/records/policy/{policy['policy_id']}/decision",
+        headers=headers, json={"status": "approved", "reason": "Policy reviewed against the exact approved source clause."},
+    )
+    assert policy_approval.status_code == 200, policy_approval.text
+
+    draft = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+    preferred = {"term_id": "TERM-GUIDED-001", "preferred": "ORBITA Air One Warranty", "locale": "en-IN", "scope": ["GUIDED-TEST-OFFER"], "status": "draft"}
+    prohibited = {"term_id": "TERM-GUIDED-002", "variant": "Orbita Warranty", "preferred_term_id": preferred["term_id"], "locale": "en-IN", "scope": ["GUIDED-TEST-OFFER"], "reason": "Incomplete approved product name", "severity": "review_required", "status": "draft"}
+    terminology = dict(draft["snapshot"]["terminology"])
+    terminology["preferred_terms"] = [*terminology.get("preferred_terms", []), preferred]
+    terminology["prohibited_or_review_terms"] = [*terminology.get("prohibited_or_review_terms", []), prohibited]
+    saved_terms = client.put(
+        f"/api/v1/brands/current/drafts/{draft_id}/section", headers=headers,
+        json={"section": "terminology", "content": terminology},
+    )
+    assert saved_terms.status_code == 200, saved_terms.text
+    for term_id in (preferred["term_id"], prohibited["term_id"]):
+        decision = client.post(
+            f"/api/v1/brands/current/drafts/{draft_id}/records/term/{term_id}/decision",
+            headers=headers, json={"status": "approved", "reason": "Reviewed canonical term and locale scope."},
+        )
+        assert decision.status_code == 200, decision.text
+
+    draft = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+    voice = dict(draft["snapshot"]["voice"])
+    voice["voice_traits"] = [*voice.get("voice_traits", []), "precise and practical"]
+    voice["approved_examples"] = [*voice.get("approved_examples", []), {
+        "example_id": "VOICE-GUIDED-001", "text": "The ORBITA Air One warranty lasts 24 months under the published terms.",
+        "labels": ["clear", "specific"], "locale": "en-IN",
+    }]
+    voice["disallowed_patterns"] = [*voice.get("disallowed_patterns", []), {
+        "pattern_id": "VOICE-GUIDED-002", "pattern": "guaranteed forever", "reason": "Unsupported absolute claim",
+        "severity": "review_required", "locale": "en-IN",
+    }]
+    saved_voice = client.put(
+        f"/api/v1/brands/current/drafts/{draft_id}/section", headers=headers,
+        json={"section": "voice", "content": voice},
+    )
+    assert saved_voice.status_code == 200, saved_voice.text
+
+    validation = client.post(f"/api/v1/brands/current/drafts/{draft_id}/validate", headers=headers)
+    assert validation.status_code == 200, validation.text
+    assert validation.json()["valid"] is True, validation.json()
+    publication = client.post(f"/api/v1/brands/current/drafts/{draft_id}/publish", headers=headers)
+    assert publication.status_code == 200, publication.text
+    published = client.get("/api/v1/brands/current/management", headers=headers)
+    assert published.status_code == 200, published.text
+    snapshot = published.json()["snapshot"]
+    assert any(item.get("fact_id") == fact["fact_id"] for item in snapshot["facts"])
+    assert any(item.get("policy_id") == policy["policy_id"] for item in snapshot["policies"])
+    assert any(item.get("term_id") == preferred["term_id"] for item in snapshot["terminology"]["preferred_terms"])
+    assert "precise and practical" in snapshot["voice"]["voice_traits"]
+
+
+def test_source_replacement_requires_clean_extraction_and_delete_restores_previous_version(client):
+    from io import BytesIO
+    from docx import Document
+    from sigillum.api import routes as api_routes
+
+    def make_docx(text: str) -> bytes:
+        document = Document()
+        document.add_heading("ORBITA Controlled Source", level=1)
+        document.add_paragraph(text)
+        output = BytesIO()
+        document.save(output)
+        return output.getvalue()
+
+    tenant_id = f"tenant_source_lifecycle_{uuid4().hex[:10]}"
+    owner_email = f"source.lifecycle.{uuid4().hex[:10]}@orbita.demo"
+    _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+    draft_response = client.post("/api/v1/brands/current/drafts", headers=headers)
+    assert draft_response.status_code == 200, draft_response.text
+    draft_id = draft_response.json()["draft_id"]
+
+    old_scanner = api_routes.scan_upload_bytes
+    clean_result = {
+        "status": "CLEAN", "engine": "test-clamav",
+        "scanned_at": "2026-11-09T00:00:00+00:00", "signature": None,
+    }
+    try:
+        api_routes.scan_upload_bytes = lambda _data: dict(clean_result)
+        first_bytes = make_docx("The product warranty is valid for 24 months from purchase.")
+        first = client.post(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/upload",
+            headers=headers,
+            data={"name": "ORBITA Warranty Specification", "source_type": "product_specification", "version": "1"},
+            files={"file": ("warranty-v1.docx", first_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+        assert first.status_code == 200, first.text
+        first_source = first.json()["source"]
+        assert first_source["scan_status"] == "CLEAN"
+        assert first_source["extraction_status"] == "COMPLETED"
+
+        # A replacement that cannot be scanned must not supersede the prior
+        # known-good draft source. Its temporary private object is cleaned up.
+        api_routes.scan_upload_bytes = lambda _data: {
+            "status": "UNAVAILABLE", "engine": "test-clamav",
+            "scanned_at": "2026-11-09T00:01:00+00:00", "signature": None,
+        }
+        blocked = client.post(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/{first_source['source_id']}/versions/upload",
+            headers=headers,
+            files={"file": ("warranty-v2-blocked.docx", make_docx("New warranty term."), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+        assert blocked.status_code == 423, blocked.text
+        assert blocked.json()["detail"]["code"] == "SOURCE_REPLACEMENT_NOT_READY"
+        after_blocked = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers)
+        assert after_blocked.status_code == 200
+        current_rows = after_blocked.json()["snapshot"]["sources"]["sources"]
+        preserved_first = next(item for item in current_rows if item["source_id"] == first_source["source_id"])
+        assert not any(item.get("superseded_by") for item in current_rows)
+        assert preserved_first["status"] == "draft"
+
+        api_routes.scan_upload_bytes = lambda _data: dict(clean_result)
+        second = client.post(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/{first_source['source_id']}/versions/upload",
+            headers=headers,
+            files={"file": ("warranty-v2.docx", make_docx("The product warranty is valid for 36 months from purchase."), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+        assert second.status_code == 200, second.text
+        second_source = second.json()["source"]
+        assert second_source["version"] == 2
+        assert second.json()["superseded_source_id"] == first_source["source_id"]
+
+        updated = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+        rows = updated["snapshot"]["sources"]["sources"]
+        previous = next(item for item in rows if item["source_id"] == first_source["source_id"])
+        current = next(item for item in rows if item["source_id"] == second_source["source_id"])
+        assert previous["status"] == "superseded"
+        assert current["status"] == "draft"
+        assert previous["superseded_by"] == current["source_id"]
+
+        comparison = client.get(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/{current['source_id']}/versions/compare",
+            headers=headers,
+        )
+        assert comparison.status_code == 200, comparison.text
+        comparison_payload = comparison.json()
+        assert comparison_payload["from"]["source_id"] == first_source["source_id"]
+        assert comparison_payload["to"]["source_id"] == current["source_id"]
+        assert comparison_payload["comparison_available"] is True
+        assert "24 months" in comparison_payload["diff"]
+        assert "36 months" in comparison_payload["diff"]
+        assert "storage_key" not in comparison.text
+        assert "extraction_key" not in comparison.text
+
+        storage = api_routes.get_storage(api_routes.settings)
+        assert storage.exists(previous["storage_key"])
+        assert storage.exists(current["storage_key"])
+        removed = client.delete(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/{current['source_id']}", headers=headers
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["deleted"] is True
+        assert removed.json()["binary_cleanup_pending"] is False
+        assert not storage.exists(current["storage_key"])
+
+        restored = client.get(f"/api/v1/brands/current/drafts/{draft_id}", headers=headers).json()
+        restored_rows = restored["snapshot"]["sources"]["sources"]
+        restored_first = next(item for item in restored_rows if item["source_id"] == first_source["source_id"])
+        assert not any(item["source_id"] == current["source_id"] for item in restored_rows)
+        assert restored_first["status"] == "draft"
+        assert "superseded_by" not in restored_first
+    finally:
+        api_routes.scan_upload_bytes = old_scanner
+
+
 def test_owner_asset_usage_policy_is_saved_validated_and_published(client):
     tenant_id = f"tenant_asset_usage_{uuid4().hex[:10]}"
     owner_email = f"asset.policy.{uuid4().hex[:10]}@orbita.demo"
@@ -761,3 +1045,56 @@ def test_owner_asset_usage_policy_is_saved_validated_and_published(client):
     assert latest.json()["snapshot"]["assets"]["usage_policies"]["logo"]["allowed_uses"] == [
         "brand_lockup", "campaign", "social_ad"
     ]
+
+
+def test_postgres_concurrent_publish_creates_exactly_one_immutable_version(client):
+    """The real PostgreSQL job proves the active-head row lock serialises publication."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    if SessionLocal.kw["bind"].dialect.name != "postgresql":
+        pytest.skip("Concurrent publication locking is verified by the PostgreSQL CI job.")
+
+    tenant_id = f"tenant_publish_race_{uuid4().hex[:12]}"
+    owner_email = f"publish.race.{uuid4().hex[:10]}@orbita.demo"
+    owner_id = _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+
+    created = client.post("/api/v1/brands/current/drafts", headers=headers)
+    assert created.status_code == 200, created.text
+    draft_id = created.json()["draft_id"]
+    brand = dict(created.json()["snapshot"]["brand"])
+    brand["description"] = "A single-winner PostgreSQL publication race test."
+    changed = client.put(
+        f"/api/v1/brands/current/drafts/{draft_id}/section",
+        headers=headers,
+        json={"section": "brand", "content": brand},
+    )
+    assert changed.status_code == 200, changed.text
+    validated = client.post(f"/api/v1/brands/current/drafts/{draft_id}/validate", headers=headers)
+    assert validated.status_code == 200 and validated.json()["valid"] is True, validated.text
+
+    from sigillum.api.routes import pack_store
+
+    barrier = Barrier(2)
+
+    def publish_once():
+        barrier.wait(timeout=10)
+        try:
+            result = pack_store.publish_draft(tenant_id, draft_id, owner_id, "brand_orbita_demo")
+            return ("published", result)
+        except (RuntimeError, ValueError) as exc:
+            return ("rejected", str(exc))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _index: publish_once(), range(2)))
+
+    assert sum(kind == "published" for kind, _value in outcomes) == 1, outcomes
+    assert sum(kind == "rejected" for kind, _value in outcomes) == 1, outcomes
+
+    management = client.get("/api/v1/brands/current/management", headers=headers)
+    assert management.status_code == 200, management.text
+    payload = management.json()
+    assert payload["active_version"]["version_id"] == "v0002"
+    assert [row["version_id"] for row in payload["versions"]].count("v0002") == 1
+    assert len(payload["versions"]) == 2

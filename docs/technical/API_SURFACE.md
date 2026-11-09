@@ -23,6 +23,9 @@ Base path: `/api/v1`
 | POST | `/brands/current/drafts/{draft_id}/publish` | Publish a new immutable pack version (Brand Owner only) |
 | POST | `/brands/current/drafts/{draft_id}/sources` | Register source provenance in the draft; URL metadata is not fetched |
 | POST | `/brands/current/drafts/{draft_id}/sources/upload` | Brand Owner-only PDF/DOCX source upload into private quarantine; scan and extraction run only after signature/size validation |
+| POST | `/brands/current/drafts/{draft_id}/sources/{source_id}/versions/upload` | Upload the next source version; the prior source remains unchanged unless the replacement scans CLEAN and extraction completes |
+| GET | `/brands/current/drafts/{draft_id}/sources/{source_id}/versions/compare` | Compare adjacent source versions with bounded text/metadata output and private storage keys redacted |
+| DELETE | `/brands/current/drafts/{draft_id}/sources/{source_id}` | Delete an unapproved, unreferenced draft source version only; protected published/referenced source history cannot be removed |
 | POST | `/brands/current/drafts/{draft_id}/sources/{source_id}/scan` | Brand Owner-only malware scan retry for a quarantined source document |
 | GET | `/brands/current/drafts/{draft_id}/sources/{source_id}/download` | Retrieve a source original only after CLEAN scan and SHA-256 verification |
 | GET | `/brands/current/drafts/{draft_id}/sources/{source_id}/extraction` | Inspect bounded extraction manifest only after CLEAN scan |
@@ -61,7 +64,7 @@ Errors use stable detail codes where defined, including `INVALID_UPLOAD`, `UPLOA
 - The file grant is a signed bearer link, expiring after `FILE_GRANT_MINUTES` (default 5; maximum 15). It is tied to the issuing session and membership; logout, session expiry, or membership deactivation invalidates it.
 
 
-### Brand Knowledge Pack semantics (Builds 013–014)
+### Brand Knowledge Pack semantics (Builds 013–016)
 
 - Knowledge Pack directories and drafts are scoped by both tenant ID and selected brand ID. New non-demo brands begin with empty facts, policies, terms, assets and sources; the legacy tenant-only demo pack is migrated only into the original ORBITA brand namespace.
 - Source registration preserves source ID/type/version, owner, approval state, validity and reference excerpt/URI metadata. Remote URLs are never fetched automatically. A source marked approved in a draft is not authoritative until the whole pack is validated and published.
@@ -74,3 +77,11 @@ Errors use stable detail codes where defined, including `INVALID_UPLOAD`, `UPLOA
 - Build 013 stores active pack heads, immutable JSON version snapshots, drafts and per-record decisions in transactional database tables. The active-version update uses a row lock plus revision compare-and-swap; draft writes also compare revisions. Build 012 filesystem packs/drafts are imported during first scoped access, and the local JSON pointer remains a repairable compatibility mirror. Private asset/source bytes remain in the configured storage adapter.
 - `GET /brands/current/drafts/{draft_id}/decisions` returns scoped, append-only record decision history to Brand Owners, Reviewers and Administrators.
 - Migration `20261109_0004` installs tenant+brand RLS on the four Knowledge Pack catalogue tables in PostgreSQL. SQLite catalogue tests pass; live non-superuser PostgreSQL RLS/concurrency and live ClamAV daemon/signature-update verification are still required.
+
+- Build 016 adds guided owner creation forms for facts, policies, terminology and voice examples. The structured JSON editor remains an advanced edit surface; server validation and owner decisions remain authoritative.
+- New facts and new policy clauses require an exact quote from an approved source record/version. New policy clauses carry a server-controlled provenance-required marker; clients cannot disable it through section JSON. Uploaded source documents must be CLEAN-scanned and fully extracted before a new policy clause can rely on their text.
+- Draft validation checks overlapping validity/scope conflicts across facts, policies, terminology and voice guidance. Conflicts remain unresolved validation items for the Brand Owner; the system does not silently choose a winner.
+- The Brand Control Center supports free-text search and product/offer, channel, locale, geography, audience, owner/approver and validity filters. This is a navigation aid and does not replace authorization or retrieval-time scope filtering.
+- Source replacement is guarded: the current source stays intact until the replacement has a CLEAN scan and completed extraction. Deletion is limited to unapproved, unreferenced draft-only source versions; deleting a removable latest source version restores its predecessor's prior state. Published and referenced source history is retained.
+- CI now defines separate PostgreSQL RLS/concurrent-publication, live ClamAV, and frontend lint/typecheck/build jobs. Their definitions do not prove hosted execution; record passing run IDs before claiming external operational acceptance.
+

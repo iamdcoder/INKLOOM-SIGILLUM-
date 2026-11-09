@@ -1010,6 +1010,10 @@ class KnowledgePackStore:
             "assets": "asset_id", "terminology": "term_id",
         }
         protected = {"status", "approved_by", "approved_at", "decision_by", "decision_at", "decision_reason"}
+        if section == "policies":
+            # New policy records are required to carry an approved source clause.
+            # This server-owned marker cannot be disabled through the JSON editor.
+            protected.add("source_provenance_required")
         upload_provenance = {
             "sources": {"storage_key", "file_sha256", "mime_type", "size_bytes", "uploaded_by", "uploaded_at", "source_format",
                         "original_filename", "extraction_key", "extraction_status", "extraction_warnings",
@@ -1049,10 +1053,19 @@ class KnowledgePackStore:
             if old is None:
                 if item.get("status") not in (None, "draft"):
                     raise ValueError(f"{section} record {record_id}: new records must start as draft; use the owner decision workflow to approve")
-                if any(item.get(field) not in (None, "") for field in protected - {"status"}):
+                new_record_protected = protected - {"status"}
+                if section == "policies":
+                    # Echoing this server-set marker back is harmless; setting it
+                    # false or to any non-boolean value is not permitted.
+                    if item.get("source_provenance_required") not in (None, True):
+                        raise ValueError(f"policy record {record_id}: source provenance requirements are controlled by the server")
+                    new_record_protected = new_record_protected - {"source_provenance_required"}
+                if any(item.get(field) not in (None, "") for field in new_record_protected):
                     raise ValueError(f"{section} record {record_id}: approval provenance is created only by the owner decision workflow")
                 if any(item.get(field) not in (None, "") for field in upload_provenance):
                     raise ValueError(f"{section} record {record_id}: upload provenance is created only by dedicated upload routes")
+                if section == "policies":
+                    item["source_provenance_required"] = True
                 continue
 
             for field in protected:
@@ -1131,6 +1144,134 @@ class KnowledgePackStore:
             _write_json_atomic(self._draft_path(tenant_id, draft_id, brand_id), draft)
             return draft
 
+    def append_source_version(
+        self, tenant_id: str, brand_id: str, draft_id: str, previous_source_id: str,
+        source: dict[str, Any], actor_id: str,
+    ) -> dict[str, Any]:
+        """Append a replacement source version while preserving the old record in draft history."""
+        with self._lock:
+            draft = self.get_draft(tenant_id, draft_id, brand_id)
+            if draft.get("status") == "PUBLISHED":
+                raise ValueError("Published Knowledge Pack drafts are immutable")
+            registry = draft["snapshot"].setdefault("sources", {"schema_version": "1.0.0", "sources": []})
+            records = registry.setdefault("sources", [])
+            previous = next((item for item in records if isinstance(item, dict) and item.get("source_id") == previous_source_id), None)
+            if previous is None:
+                raise FileNotFoundError("Source version to replace was not found")
+            if previous.get("status") == "superseded":
+                raise ValueError("A superseded source cannot be replaced again")
+            if str(source.get("name", "")).strip().casefold() != str(previous.get("name", "")).strip().casefold():
+                raise ValueError("A replacement must retain the source's logical name")
+            try:
+                expected_version = int(previous.get("version", 1)) + 1
+                actual_version = int(source.get("version", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Source versions must be positive integers") from exc
+            if actual_version != expected_version:
+                raise ValueError(f"Replacement must use source version {expected_version}")
+            if any(isinstance(item, dict) and item.get("source_id") == source.get("source_id") for item in records):
+                raise ValueError("Source identifier already exists in this draft")
+            previous["superseded_from_status"] = previous.get("status", "draft")
+            previous["status"] = "superseded"
+            previous["superseded_by"] = source.get("source_id")
+            previous["superseded_at"] = _now()
+            source["supersedes_source_id"] = previous_source_id
+            records.append(dict(source))
+            draft["status"] = "DRAFT"
+            draft["validation"] = None
+            draft["updated_at"] = _now()
+            draft["updated_by"] = actor_id
+            return self._persist_draft(tenant_id, brand_id, draft)
+
+    @staticmethod
+    def _snapshot_references_key(value: Any, storage_key: str) -> bool:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if str(key) in {"storage_key", "extraction_key"} and nested == storage_key:
+                    return True
+                if KnowledgePackStore._snapshot_references_key(nested, storage_key):
+                    return True
+        elif isinstance(value, list):
+            return any(KnowledgePackStore._snapshot_references_key(item, storage_key) for item in value)
+        return False
+
+    def remove_unpublished_source(
+        self, tenant_id: str, brand_id: str, draft_id: str, source_id: str, actor_id: str,
+    ) -> dict[str, Any]:
+        """Remove an unapproved source only when no fact or immutable version uses it."""
+        with self._lock:
+            draft = self.get_draft(tenant_id, draft_id, brand_id)
+            if draft.get("status") == "PUBLISHED":
+                raise ValueError("Published Knowledge Pack drafts are immutable")
+            registry = draft.get("snapshot", {}).get("sources", {}) or {}
+            records = registry.get("sources", []) if isinstance(registry, dict) else []
+            source = next((item for item in records if isinstance(item, dict) and item.get("source_id") == source_id), None)
+            if source is None:
+                raise FileNotFoundError("Source record not found")
+            if source.get("status") == "approved":
+                raise ValueError("An approved source cannot be deleted; supersede it with a new version instead")
+            if source.get("superseded_by"):
+                raise ValueError("A source with a successor version cannot be deleted; delete the latest version first")
+            for index, fact in enumerate(draft.get("snapshot", {}).get("facts", [])):
+                ref = fact.get("source_ref") if isinstance(fact, dict) else None
+                if isinstance(ref, dict) and str(ref.get("source_id")) == source_id:
+                    raise ValueError(f"Source is referenced by fact at facts[{index}]; update the fact provenance before deletion")
+
+            keys = [str(source.get(key)) for key in ("storage_key", "extraction_key") if source.get(key)]
+            if keys:
+                if self.session_factory is not None:
+                    with self._database(tenant_id, brand_id) as db:
+                        versions = db.scalars(select(models.BrandKnowledgePackVersion).where(
+                            models.BrandKnowledgePackVersion.tenant_id == tenant_id,
+                            models.BrandKnowledgePackVersion.brand_id == brand_id,
+                        )).all()
+                        if any(self._snapshot_references_key(row.snapshot, key) for row in versions for key in keys):
+                            raise ValueError("Source objects are referenced by immutable published history and cannot be deleted")
+                        other_drafts = db.scalars(select(models.BrandKnowledgePackDraft).where(
+                            models.BrandKnowledgePackDraft.tenant_id == tenant_id,
+                            models.BrandKnowledgePackDraft.brand_id == brand_id,
+                            models.BrandKnowledgePackDraft.draft_id != draft_id,
+                        )).all()
+                        if any(self._snapshot_references_key(row.snapshot, key) for row in other_drafts for key in keys):
+                            raise ValueError("Source objects are referenced by another draft and cannot be deleted")
+                else:
+                    versions_root = self.active_root(tenant_id, brand_id).parent
+                    for version_root in versions_root.iterdir() if versions_root.exists() else []:
+                        if version_root.is_dir() and (version_root / "version.json").exists():
+                            snap = BrandPack(root=version_root).snapshot()
+                            if any(self._snapshot_references_key(snap, key) for key in keys):
+                                raise ValueError("Source objects are referenced by immutable published history and cannot be deleted")
+                    drafts_root = self._brand_root(tenant_id, brand_id) / "drafts"
+                    for draft_file in drafts_root.glob("*.json") if drafts_root.exists() else []:
+                        if draft_file.stem == draft_id:
+                            continue
+                        try:
+                            other = self._read_json(draft_file)
+                        except (OSError, ValueError, json.JSONDecodeError):
+                            continue
+                        if any(self._snapshot_references_key(other.get("snapshot", {}), key) for key in keys):
+                            raise ValueError("Source objects are referenced by another draft and cannot be deleted")
+
+            predecessor_id = source.get("supersedes_source_id")
+            if predecessor_id:
+                predecessor = next(
+                    (item for item in records if isinstance(item, dict) and item.get("source_id") == predecessor_id),
+                    None,
+                )
+                if predecessor is None or predecessor.get("superseded_by") != source_id:
+                    raise ValueError("Source version lineage is inconsistent; deletion is blocked for manual reconciliation")
+                predecessor["status"] = predecessor.pop("superseded_from_status", "draft")
+                predecessor.pop("superseded_by", None)
+                predecessor.pop("superseded_at", None)
+            registry["sources"] = [item for item in records if not (isinstance(item, dict) and item.get("source_id") == source_id)]
+            draft["snapshot"]["sources"] = registry
+            draft["status"] = "DRAFT"
+            draft["validation"] = None
+            draft["updated_at"] = _now()
+            draft["updated_by"] = actor_id
+            self._persist_draft(tenant_id, brand_id, draft)
+            return deepcopy(source)
+
     def append_asset(
         self, tenant_id: str, brand_id: str, draft_id: str, asset: dict[str, Any], actor_id: str
     ) -> dict[str, Any]:
@@ -1208,6 +1349,38 @@ class KnowledgePackStore:
         draft["updated_by"] = actor_id
         return self._persist_draft(tenant_id, brand_id, draft)
 
+    @staticmethod
+    def _validate_policy_source_reference(snapshot: dict[str, Any], policy: dict[str, Any]) -> None:
+        """Require new policy clauses to cite an approved source version and exact excerpt."""
+        if not policy.get("source_provenance_required"):
+            return
+        source_ref = policy.get("source_ref")
+        if not isinstance(source_ref, dict) or not source_ref.get("source_id"):
+            raise ValueError("POLICY_SOURCE_PROVENANCE_REQUIRED: a new policy clause must reference an approved source record")
+        source_rows = (snapshot.get("sources", {}) or {}).get("sources", [])
+        source = next((
+            item for item in source_rows
+            if isinstance(item, dict)
+            and str(item.get("source_id")) == str(source_ref.get("source_id"))
+        ), None)
+        if source is None or source.get("status") != "approved":
+            raise ValueError("POLICY_SOURCE_NOT_APPROVED: the policy clause must reference an owner-approved source")
+        try:
+            if int(source_ref.get("source_version", 0)) != int(source.get("version", 1)):
+                raise ValueError("POLICY_SOURCE_VERSION_MISMATCH: the policy must cite the exact approved source version")
+        except (TypeError, ValueError) as exc:
+            if isinstance(exc, ValueError) and str(exc).startswith("POLICY_SOURCE_VERSION_MISMATCH"):
+                raise
+            raise ValueError("POLICY_SOURCE_VERSION_INVALID: source version must be a positive integer") from exc
+        quote = str(source_ref.get("quote", "")).strip()
+        reference_text = str(source.get("reference_text") or "")
+        if not quote or not reference_text.strip():
+            raise ValueError("POLICY_SOURCE_QUOTE_REQUIRED: retain the exact policy clause excerpt in the approved source")
+        if quote not in reference_text:
+            raise ValueError("POLICY_SOURCE_QUOTE_NOT_FOUND: the policy excerpt is not present in the approved source text")
+        if source.get("storage_key") and (source.get("scan_status") != "CLEAN" or source.get("extraction_status") != "COMPLETED"):
+            raise ValueError("POLICY_SOURCE_NOT_READY: uploaded source must pass scanning and complete extraction")
+
     def decide_record(
         self, tenant_id: str, brand_id: str, draft_id: str, record_type: str, record_id: str,
         status: str, actor_id: str, reason: str | None = None,
@@ -1234,6 +1407,8 @@ class KnowledgePackStore:
             record = next((item for item in candidates if isinstance(item, dict) and str(item.get(id_field[record_type])) == record_id), None)
             if record is None:
                 raise FileNotFoundError("Knowledge record not found")
+            if status == "approved" and record_type == "policy":
+                self._validate_policy_source_reference(snapshot, record)
             if status == "approved" and record_type == "source" and record.get("storage_key"):
                 if record.get("scan_status") != "CLEAN":
                     raise ValueError("SOURCE_MALWARE_SCAN_REQUIRED: the uploaded source must pass malware scanning before approval")
@@ -1287,6 +1462,8 @@ class KnowledgePackStore:
             record = next((item for item in candidates if isinstance(item, dict) and str(item.get(id_field[record_type])) == record_id), None)
             if record is None:
                 raise FileNotFoundError("Knowledge record not found")
+            if status == "approved" and record_type == "policy":
+                self._validate_policy_source_reference(snapshot, record)
             if status == "approved" and record_type == "source" and record.get("storage_key"):
                 if record.get("scan_status") != "CLEAN":
                     raise ValueError("SOURCE_MALWARE_SCAN_REQUIRED: the uploaded source must pass malware scanning before approval")
@@ -1718,8 +1895,46 @@ class KnowledgePackStore:
             seen.add(record_id)
             if policy.get("status", "draft") not in ALLOWED_RECORD_STATUSES:
                 add("POLICY_STATUS_INVALID", f"{path}.status", "Unsupported policy status.")
+            if not str(policy.get("name", "")).strip():
+                add("POLICY_NAME_REQUIRED", f"{path}.name", "Every policy requires a human-readable name.")
+            if not str(policy.get("rule", "")).strip():
+                add("POLICY_RULE_REQUIRED", f"{path}.rule", "Every policy requires an explicit rule or requirement.")
             if policy.get("severity") and policy["severity"] not in ALLOWED_SEVERITIES:
                 add("POLICY_SEVERITY_INVALID", f"{path}.severity", "Severity must be blocking, review_required, suggestion or informational.")
+            allowed_actions = {"review", "correct", "remove", "disclose", "manual_check", "block", "warn", "escalate"}
+            action = policy.get("required_action", policy.get("action"))
+            if action is not None and action not in allowed_actions:
+                add("POLICY_ACTION_INVALID", f"{path}.required_action", "Policy action is not one of the supported deterministic routes.")
+            policy_scope = policy.get("scope", {})
+            if policy_scope is not None and not isinstance(policy_scope, dict):
+                add("POLICY_SCOPE_INVALID", f"{path}.scope", "Policy scope must be an object with explicit dimensions.")
+            elif isinstance(policy_scope, dict):
+                for scope_field, scope_value in policy_scope.items():
+                    if scope_value is None:
+                        continue
+                    if not isinstance(scope_value, (str, list, tuple)):
+                        add("POLICY_SCOPE_VALUE_INVALID", f"{path}.scope.{scope_field}", "Scope values must be text or a list of text values.")
+                    elif isinstance(scope_value, (list, tuple)) and any(not isinstance(item, str) or not item.strip() for item in scope_value):
+                        add("POLICY_SCOPE_VALUE_INVALID", f"{path}.scope.{scope_field}", "Scope lists must contain non-empty text values only.")
+            policy_dates: dict[str, datetime] = {}
+            for temporal_field in ("valid_from", "valid_until"):
+                raw_value = policy.get(temporal_field)
+                if raw_value in (None, ""):
+                    continue
+                if not isinstance(raw_value, str):
+                    add("POLICY_TEMPORAL_VALUE_INVALID", f"{path}.{temporal_field}", "Policy validity timestamps must be timezone-aware ISO-8601 strings.")
+                    continue
+                try:
+                    parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        raise ValueError
+                    policy_dates[temporal_field] = parsed
+                except ValueError:
+                    add("POLICY_TEMPORAL_VALUE_INVALID", f"{path}.{temporal_field}", "Policy validity timestamps must be timezone-aware ISO-8601 strings.")
+            if policy_dates.get("valid_from") and policy_dates.get("valid_until") and policy_dates["valid_until"] < policy_dates["valid_from"]:
+                add("POLICY_VALIDITY_INTERVAL_INVALID", path, "Policy valid_until must be later than or equal to valid_from.")
+            if policy.get("status") == "approved" and (not policy.get("approved_by") or not policy.get("approved_at")):
+                add("POLICY_APPROVAL_PROVENANCE_REQUIRED", path, "Approved policies require an approving owner and timestamp.")
 
         terminology = snapshot.get("terminology")
         if not isinstance(terminology, dict):
@@ -1758,6 +1973,54 @@ class KnowledgePackStore:
             for field in ("voice_traits", "approved_examples", "disallowed_patterns"):
                 if not isinstance(voice.get(field, []), list):
                     add("VOICE_LIST_INVALID", f"voice.{field}", f"{field} must be an array.")
+            traits = voice.get("voice_traits", [])
+            if isinstance(traits, list):
+                seen_traits: set[str] = set()
+                for index, trait in enumerate(traits):
+                    if not isinstance(trait, str) or not trait.strip():
+                        add("VOICE_TRAIT_INVALID", f"voice.voice_traits[{index}]", "Voice traits must be non-empty text values.")
+                        continue
+                    trait_key = trait.strip().casefold()
+                    if trait_key in seen_traits:
+                        add("DUPLICATE_VOICE_TRAIT", f"voice.voice_traits[{index}]", "Duplicate voice traits should be consolidated.")
+                    seen_traits.add(trait_key)
+            examples = voice.get("approved_examples", [])
+            if isinstance(examples, list):
+                seen_examples: set[str] = set()
+                for index, example in enumerate(examples):
+                    path = f"voice.approved_examples[{index}]"
+                    if not isinstance(example, dict):
+                        add("VOICE_EXAMPLE_INVALID", path, "Each approved voice example must be an object.")
+                        continue
+                    example_id = str(example.get("example_id", "")).strip()
+                    if not example_id:
+                        add("VOICE_EXAMPLE_ID_REQUIRED", f"{path}.example_id", "Every voice example requires an example_id.")
+                    elif example_id in seen_examples:
+                        add("DUPLICATE_VOICE_EXAMPLE_ID", f"{path}.example_id", f"Duplicate voice example ID: {example_id}.")
+                    seen_examples.add(example_id)
+                    if not str(example.get("text", "")).strip():
+                        add("VOICE_EXAMPLE_TEXT_REQUIRED", f"{path}.text", "Voice examples require non-empty text.")
+                    if not isinstance(example.get("labels", []), list):
+                        add("VOICE_EXAMPLE_LABELS_INVALID", f"{path}.labels", "Voice example labels must be an array.")
+            patterns = voice.get("disallowed_patterns", [])
+            if isinstance(patterns, list):
+                seen_patterns: set[str] = set()
+                for index, pattern in enumerate(patterns):
+                    path = f"voice.disallowed_patterns[{index}]"
+                    if not isinstance(pattern, dict):
+                        add("VOICE_PATTERN_INVALID", path, "Each disallowed voice pattern must be an object.")
+                        continue
+                    phrase = str(pattern.get("pattern", "")).strip()
+                    if not phrase:
+                        add("VOICE_PATTERN_TEXT_REQUIRED", f"{path}.pattern", "Disallowed voice patterns require non-empty text.")
+                    phrase_key = phrase.casefold()
+                    locale_key = str(pattern.get("locale", "")).strip().casefold()
+                    duplicate_key = f"{locale_key}::{phrase_key}"
+                    if phrase and duplicate_key in seen_patterns:
+                        add("DUPLICATE_VOICE_PATTERN", f"{path}.pattern", "Duplicate disallowed voice patterns should be consolidated.")
+                    seen_patterns.add(duplicate_key)
+                    if pattern.get("severity") and pattern.get("severity") not in ALLOWED_SEVERITIES:
+                        add("VOICE_PATTERN_SEVERITY_INVALID", f"{path}.severity", "Voice pattern severity must be blocking, review_required, suggestion or informational.")
 
         assets = snapshot.get("assets")
         if not isinstance(assets, dict):
@@ -1830,6 +2093,8 @@ class KnowledgePackStore:
             add("SOURCES_INVALID", "sources", "Source registry must contain a sources array.")
         else:
             seen_sources: set[str] = set()
+            source_by_id: dict[str, dict[str, Any]] = {}
+            logical_source_versions: set[tuple[str, int]] = set()
             for index, source in enumerate(sources.get("sources", [])):
                 path = f"sources.sources[{index}]"
                 if not isinstance(source, dict):
@@ -1841,6 +2106,8 @@ class KnowledgePackStore:
                 elif source_id in seen_sources:
                     add("DUPLICATE_SOURCE_ID", f"{path}.source_id", f"Duplicate source_id: {source_id}.")
                 seen_sources.add(source_id)
+                if source_id:
+                    source_by_id[source_id] = source
                 if not str(source.get("name", "")).strip():
                     add("SOURCE_NAME_REQUIRED", f"{path}.name", "Every source requires a display name.")
                 if source.get("status", "draft") not in ALLOWED_RECORD_STATUSES:
@@ -1848,8 +2115,13 @@ class KnowledgePackStore:
                 if source.get("source_type", "reference_text") not in {"reference_text", "policy_document", "product_specification", "campaign_terms", "guideline", "other"}:
                     add("SOURCE_TYPE_INVALID", f"{path}.source_type", "Unsupported source type.")
                 try:
-                    if int(source.get("version", 1)) < 1:
+                    source_version = int(source.get("version", 1))
+                    if source_version < 1:
                         raise ValueError
+                    logical_key = (str(source.get("name", "")).strip().casefold(), source_version)
+                    if logical_key[0] and logical_key in logical_source_versions:
+                        add("SOURCE_LOGICAL_VERSION_DUPLICATE", f"{path}.version", "A logical source name cannot have duplicate version numbers in one draft.")
+                    logical_source_versions.add(logical_key)
                 except (TypeError, ValueError):
                     add("SOURCE_VERSION_INVALID", f"{path}.version", "Source version must be a positive integer.")
                 if source.get("source_uri"):
@@ -1909,11 +2181,33 @@ class KnowledgePackStore:
                     return False
                 return True
 
-            def _scope_key(record: dict[str, Any]) -> tuple[str, ...]:
-                return tuple(
-                    str(record.get(field, "") or "").strip().casefold()
-                    for field in ("subject", "predicate", "product", "product_id", "geography", "region", "channel", "locale", "audience", "population")
+            def _scope_values(record: dict[str, Any], field: str) -> set[str]:
+                nested = record.get("scope") if isinstance(record.get("scope"), dict) else {}
+                raw = record.get(field)
+                if raw in (None, ""):
+                    raw = nested.get(field)
+                if raw in (None, ""):
+                    return set()
+                values = raw if isinstance(raw, (list, tuple, set)) else [raw]
+                return {str(item).strip().casefold() for item in values if str(item).strip()}
+
+            def _scopes_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
+                # An omitted dimension is broad scope; explicit differing values
+                # are disjoint. Lists support policies which apply to multiple scopes.
+                dimensions = (
+                    "subject", "predicate", "product", "product_id", "offer_id",
+                    "geography", "region", "channel", "locale", "audience", "population",
                 )
+                for field in dimensions:
+                    left_values = _scope_values(left, field)
+                    right_values = _scope_values(right, field)
+                    if not left_values or not right_values:
+                        continue
+                    if {"all", "*"} & left_values or {"all", "*"} & right_values:
+                        continue
+                    if left_values.isdisjoint(right_values):
+                        return False
+                return True
 
             approved_facts = [
                 (index, fact) for index, fact in enumerate(facts)
@@ -1923,10 +2217,10 @@ class KnowledgePackStore:
                 for right_index, right in approved_facts[position + 1 :]:
                     left_authority = left.get("source_precedence", left.get("authority_rank", 1))
                     right_authority = right.get("source_precedence", right.get("authority_rank", 1))
-                    left_value = tuple(str(left.get(field, "")).strip().casefold() for field in ("value", "unit", "qualifier", "denominator"))
-                    right_value = tuple(str(right.get(field, "")).strip().casefold() for field in ("value", "unit", "qualifier", "denominator"))
+                    left_value = tuple(str(left.get(field, "")).strip().casefold() for field in ("value", "unit", "qualifier", "denominator", "comparator", "baseline", "period"))
+                    right_value = tuple(str(right.get(field, "")).strip().casefold() for field in ("value", "unit", "qualifier", "denominator", "comparator", "baseline", "period"))
                     if (
-                        _scope_key(left) == _scope_key(right)
+                        _scopes_overlap(left, right)
                         and left_authority == right_authority
                         and left_value != right_value
                         and _validity_overlaps(left, right)
@@ -1940,12 +2234,20 @@ class KnowledgePackStore:
             ]
             for position, (left_index, left) in enumerate(approved_policies):
                 for right_index, right in approved_policies[position + 1 :]:
-                    left_rule = str(left.get("rule", left.get("name", left.get("category", "")))).strip().casefold()
-                    right_rule = str(right.get("rule", right.get("name", right.get("category", "")))).strip().casefold()
+                    left_rule = str(left.get("conflict_key", left.get("rule_id", left.get("name", "")))).strip().casefold()
+                    right_rule = str(right.get("conflict_key", right.get("rule_id", right.get("name", "")))).strip().casefold()
+                    same_category = str(left.get("category", "")).strip().casefold() == str(right.get("category", "")).strip().casefold()
+                    conflicting_action = (
+                        left.get("severity"), left.get("required_action", left.get("action")),
+                        left.get("enabled", True), left.get("decision", ""), str(left.get("rule", "")).strip().casefold(),
+                    ) != (
+                        right.get("severity"), right.get("required_action", right.get("action")),
+                        right.get("enabled", True), right.get("decision", ""), str(right.get("rule", "")).strip().casefold(),
+                    )
                     if (
-                        left_rule and left_rule == right_rule
-                        and _scope_key(left) == _scope_key(right)
-                        and (left.get("severity"), left.get("required_action", left.get("action"))) != (right.get("severity"), right.get("required_action", right.get("action")))
+                        left_rule and left_rule == right_rule and same_category
+                        and _scopes_overlap(left, right)
+                        and conflicting_action
                         and _validity_overlaps(left, right)
                     ):
                         add("APPROVED_POLICY_CONFLICT", f"policies[{left_index}]", f"Policy conflicts with policies[{right_index}] for the same rule and overlapping scope/validity.")
@@ -1954,19 +2256,124 @@ class KnowledgePackStore:
             if isinstance(terminology, dict):
                 preferred = terminology.get("preferred_terms", [])
                 prohibited = terminology.get("prohibited_or_review_terms", [])
-                for preferred_index, preferred_record in enumerate(preferred if isinstance(preferred, list) else []):
+                preferred_rows = preferred if isinstance(preferred, list) else []
+                prohibited_rows = prohibited if isinstance(prohibited, list) else []
+
+                def _term_scope_values(record: dict[str, Any]) -> set[str]:
+                    raw_scope = record.get("scope", [])
+                    values = raw_scope if isinstance(raw_scope, (list, tuple, set)) else [raw_scope]
+                    return {str(value).strip().casefold() for value in values if str(value).strip()}
+
+                def _term_scopes_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
+                    left_scope, right_scope = _term_scope_values(left), _term_scope_values(right)
+                    if not left_scope or not right_scope or {"all", "*"} & left_scope or {"all", "*"} & right_scope:
+                        return True
+                    return not left_scope.isdisjoint(right_scope)
+
+                preferred_by_id = {
+                    str(record.get("term_id")): record for record in preferred_rows
+                    if isinstance(record, dict) and str(record.get("term_id", "")).strip()
+                }
+                for preferred_index, preferred_record in enumerate(preferred_rows):
                     if not isinstance(preferred_record, dict) or preferred_record.get("status", "approved") != "approved":
                         continue
                     preferred_text = str(preferred_record.get("preferred", "")).strip().casefold()
-                    for prohibited_index, prohibited_record in enumerate(prohibited if isinstance(prohibited, list) else []):
+                    preferred_locale = str(preferred_record.get("locale", "")).strip().casefold()
+                    for other_index, other_record in enumerate(preferred_rows[preferred_index + 1 :], preferred_index + 1):
+                        if not isinstance(other_record, dict) or other_record.get("status", "approved") != "approved":
+                            continue
+                        other_text = str(other_record.get("preferred", "")).strip().casefold()
+                        other_locale = str(other_record.get("locale", "")).strip().casefold()
+                        locale_overlaps = not preferred_locale or not other_locale or preferred_locale == other_locale
+                        if preferred_text and preferred_text == other_text and locale_overlaps and _term_scopes_overlap(preferred_record, other_record):
+                            add("DUPLICATE_PREFERRED_TERMINOLOGY", f"terminology.preferred_terms[{other_index}]", f"Preferred term duplicates terminology.preferred_terms[{preferred_index}] in an overlapping locale/scope.")
+                    for prohibited_index, prohibited_record in enumerate(prohibited_rows):
                         if not isinstance(prohibited_record, dict) or prohibited_record.get("status", "approved") != "approved":
                             continue
                         prohibited_text = str(prohibited_record.get("variant", "")).strip().casefold()
-                        preferred_locale = str(preferred_record.get("locale", "")).strip().casefold()
                         prohibited_locale = str(prohibited_record.get("locale", "")).strip().casefold()
-                        if preferred_text and preferred_text == prohibited_text and preferred_locale == prohibited_locale:
-                            add("APPROVED_TERMINOLOGY_CONFLICT", f"terminology.preferred_terms[{preferred_index}]", f"Preferred term conflicts with terminology.prohibited_or_review_terms[{prohibited_index}] for the same locale.")
-                            add("APPROVED_TERMINOLOGY_CONFLICT", f"terminology.prohibited_or_review_terms[{prohibited_index}]", f"Prohibited term conflicts with terminology.preferred_terms[{preferred_index}] for the same locale.")
+                        locale_overlaps = not preferred_locale or not prohibited_locale or preferred_locale == prohibited_locale
+                        if preferred_text and preferred_text == prohibited_text and locale_overlaps and _term_scopes_overlap(preferred_record, prohibited_record):
+                            add("APPROVED_TERMINOLOGY_CONFLICT", f"terminology.preferred_terms[{preferred_index}]", f"Preferred term conflicts with terminology.prohibited_or_review_terms[{prohibited_index}] for an overlapping locale/scope.")
+                            add("APPROVED_TERMINOLOGY_CONFLICT", f"terminology.prohibited_or_review_terms[{prohibited_index}]", f"Prohibited term conflicts with terminology.preferred_terms[{preferred_index}] for an overlapping locale/scope.")
+                for prohibited_index, prohibited_record in enumerate(prohibited_rows):
+                    if not isinstance(prohibited_record, dict):
+                        continue
+                    preferred_term_id = prohibited_record.get("preferred_term_id")
+                    if preferred_term_id:
+                        preferred_record = preferred_by_id.get(str(preferred_term_id))
+                        if preferred_record is None:
+                            add("TERMINOLOGY_PREFERRED_REFERENCE_MISSING", f"terminology.prohibited_or_review_terms[{prohibited_index}].preferred_term_id", "The linked preferred term does not exist in this Knowledge Pack draft.")
+                        else:
+                            link_locale = str(prohibited_record.get("locale", "")).strip().casefold()
+                            preferred_locale = str(preferred_record.get("locale", "")).strip().casefold()
+                            if link_locale and preferred_locale and link_locale != preferred_locale:
+                                add("TERMINOLOGY_PREFERRED_LOCALE_MISMATCH", f"terminology.prohibited_or_review_terms[{prohibited_index}].preferred_term_id", "A prohibited variant and its preferred term must use the same locale.")
+                            if not _term_scopes_overlap(prohibited_record, preferred_record):
+                                add("TERMINOLOGY_PREFERRED_SCOPE_MISMATCH", f"terminology.prohibited_or_review_terms[{prohibited_index}].preferred_term_id", "A prohibited variant and its preferred term must have overlapping scope tags.")
+
+            if isinstance(voice, dict):
+                voice_examples = voice.get("approved_examples", [])
+                voice_patterns = voice.get("disallowed_patterns", [])
+                if isinstance(voice_examples, list) and isinstance(voice_patterns, list):
+                    for example_index, example in enumerate(voice_examples):
+                        if not isinstance(example, dict) or not str(example.get("text", "")).strip():
+                            continue
+                        example_locale = str(example.get("locale", "")).strip().casefold()
+                        example_text = str(example.get("text", "")).casefold()
+                        for pattern_index, pattern in enumerate(voice_patterns):
+                            if not isinstance(pattern, dict):
+                                continue
+                            phrase = str(pattern.get("pattern", "")).strip()
+                            pattern_locale = str(pattern.get("locale", "")).strip().casefold()
+                            locale_overlaps = not example_locale or not pattern_locale or example_locale == pattern_locale
+                            if phrase and locale_overlaps and phrase.casefold() in example_text:
+                                add(
+                                    "APPROVED_VOICE_EXAMPLE_CONFLICT",
+                                    f"voice.approved_examples[{example_index}]",
+                                    f"Approved voice example contains disallowed pattern from voice.disallowed_patterns[{pattern_index}]: {phrase}.",
+                                )
+
+            # Keep source replacement history a single, reciprocal version chain.
+            successor_seen: set[str] = set()
+            for index, source in enumerate(sources.get("sources", [])):
+                if not isinstance(source, dict):
+                    continue
+                source_id = str(source.get("source_id", ""))
+                path = f"sources.sources[{index}]"
+                predecessor_id = source.get("supersedes_source_id")
+                successor_id = source.get("superseded_by")
+                if predecessor_id and str(predecessor_id) == source_id:
+                    add("SOURCE_LINEAGE_SELF_REFERENCE", path, "A source version cannot supersede itself.")
+                if successor_id and str(successor_id) == source_id:
+                    add("SOURCE_LINEAGE_SELF_REFERENCE", path, "A source version cannot point to itself as its successor.")
+                if predecessor_id:
+                    predecessor = source_by_id.get(str(predecessor_id))
+                    if predecessor is None:
+                        add("SOURCE_PREDECESSOR_MISSING", f"{path}.supersedes_source_id", "The previous source version is missing from this draft history.")
+                    else:
+                        try:
+                            consecutive = int(source.get("version", 0)) == int(predecessor.get("version", 0)) + 1
+                        except (TypeError, ValueError):
+                            consecutive = False
+                        same_document = str(source.get("name", "")).strip().casefold() == str(predecessor.get("name", "")).strip().casefold()
+                        reciprocal = str(predecessor.get("superseded_by", "")) == source_id and predecessor.get("status") == "superseded"
+                        if not consecutive or not same_document or not reciprocal:
+                            add("SOURCE_LINEAGE_INCONSISTENT", f"{path}.supersedes_source_id", "The source replacement link, logical name, version increment and predecessor state must agree.")
+                if successor_id:
+                    successor_key = str(successor_id)
+                    if successor_key in successor_seen:
+                        add("SOURCE_LINEAGE_MULTIPLE_SUCCESSORS", f"{path}.superseded_by", "A source version may have only one direct successor.")
+                    successor_seen.add(successor_key)
+                    successor = source_by_id.get(successor_key)
+                    if successor is None or str(successor.get("supersedes_source_id", "")) != source_id or source.get("status") != "superseded":
+                        add("SOURCE_LINEAGE_INCONSISTENT", f"{path}.superseded_by", "A superseded source must point to an existing successor that points back to it.")
+                if source.get("status") == "superseded" and not successor_id:
+                    add("SOURCE_SUPERSEDED_SUCCESSOR_REQUIRED", path, "A superseded source must identify the source version that replaced it.")
+                if source.get("status") != "superseded" and successor_id:
+                    add("SOURCE_SUPERSEDED_STATUS_REQUIRED", f"{path}.status", "A source with a successor must have superseded status.")
+                if source.get("superseded_from_status") not in (None, "draft", "approved", "rejected", "not_approved"):
+                    add("SOURCE_SUPERSEDED_ORIGIN_STATUS_INVALID", f"{path}.superseded_from_status", "The recorded pre-supersession state is not supported.")
 
             approved_sources = {
                 str(item.get("source_id")): item
@@ -1998,9 +2405,35 @@ class KnowledgePackStore:
                     elif quote not in str(approved_source["reference_text"]):
                         add("FACT_SOURCE_QUOTE_NOT_FOUND", f"facts[{index}].source_ref.quote", "The fact's source quote is not present in the approved source record's reference text.")
 
+        source_rows_for_policy = (sources.get("sources", []) if isinstance(sources, dict) else [])
+        approved_source_map = {
+            str(item.get("source_id")): item for item in source_rows_for_policy
+            if isinstance(item, dict) and item.get("status") == "approved"
+        }
         for index, policy in enumerate(policies):
-            if isinstance(policy, dict) and policy.get("status") == "approved":
-                if not policy.get("approved_by") or not policy.get("approved_at"):
-                    add("POLICY_APPROVAL_PROVENANCE_REQUIRED", f"policies[{index}]", "Approved policies require approved_by and approved_at.")
+            if not isinstance(policy, dict) or policy.get("status") != "approved":
+                continue
+            if not policy.get("approved_by") or not policy.get("approved_at"):
+                add("POLICY_APPROVAL_PROVENANCE_REQUIRED", f"policies[{index}]", "Approved policies require approved_by and approved_at.")
+            if policy.get("source_provenance_required"):
+                source_ref = policy.get("source_ref")
+                source_id = source_ref.get("source_id") if isinstance(source_ref, dict) else None
+                approved_source = approved_source_map.get(str(source_id)) if source_id else None
+                if approved_source is None:
+                    add("POLICY_SOURCE_NOT_APPROVED", f"policies[{index}].source_ref", "A new approved policy must link to an approved source registry record.")
+                else:
+                    try:
+                        if int(source_ref.get("source_version", 0)) != int(approved_source.get("version", 1)):
+                            add("POLICY_SOURCE_VERSION_MISMATCH", f"policies[{index}].source_ref.source_version", "The policy must cite the exact approved source version.")
+                    except (TypeError, ValueError):
+                        add("POLICY_SOURCE_VERSION_INVALID", f"policies[{index}].source_ref.source_version", "Source version must be a positive integer.")
+                    quote = str(source_ref.get("quote", "")).strip()
+                    reference_text = str(approved_source.get("reference_text") or "")
+                    if not quote or not reference_text.strip():
+                        add("POLICY_SOURCE_QUOTE_REQUIRED", f"policies[{index}].source_ref.quote", "Approved policies require the exact clause excerpt and retained source text.")
+                    elif quote not in reference_text:
+                        add("POLICY_SOURCE_QUOTE_NOT_FOUND", f"policies[{index}].source_ref.quote", "The policy excerpt is not present in the approved source text.")
+                    if approved_source.get("storage_key") and (approved_source.get("scan_status") != "CLEAN" or approved_source.get("extraction_status") != "COMPLETED"):
+                        add("POLICY_SOURCE_NOT_READY", f"policies[{index}].source_ref", "Uploaded policy source must pass malware scanning and complete extraction.")
 
         return errors

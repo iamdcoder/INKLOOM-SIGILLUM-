@@ -30,6 +30,8 @@ class ObjectStorage(Protocol):
 
     def exists(self, key: str) -> bool: ...
 
+    def delete_bytes(self, key: str) -> None: ...
+
     def health_check(self) -> bool: ...
 
 
@@ -109,6 +111,14 @@ class LocalFilesystemStorage:
     def exists(self, key: str) -> bool:
         target = self._path(key, create_parent=False)
         return target.is_file()
+
+    def delete_bytes(self, key: str) -> None:
+        """Idempotently delete one object from the private local store."""
+        target = self._path(key, create_parent=False)
+        try:
+            target.unlink(missing_ok=True)
+        except OSError as exc:
+            raise StorageUnavailable("Local object storage could not delete the content.") from exc
 
     def health_check(self) -> bool:
         try:
@@ -230,6 +240,14 @@ class S3CompatibleStorage:
             raise StorageUnavailable("Configured object storage could not inspect the content.") from exc
         except BotoCoreError as exc:
             raise StorageUnavailable("Configured object storage could not inspect the content.") from exc
+
+    def delete_bytes(self, key: str) -> None:
+        """Delete a private S3-compatible object; missing keys are treated as success."""
+        key = validate_object_key(key)
+        try:
+            self.client.delete_object(Bucket=self.bucket, Key=key)
+        except (ClientError, BotoCoreError) as exc:
+            raise StorageUnavailable("Configured object storage could not delete the content.") from exc
 
     def health_check(self) -> bool:
         try:

@@ -170,3 +170,25 @@
 .source-extraction-region>p{margin:5px 0 0;color:#cfdbdf;font-size:9px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
 .text-warning{color:#e8bf78!important}
 @media(max-width:760px){.knowledge-comparison{padding-inline:12px}.knowledge-source-upload{padding:10px}}
+
+/* Guided Knowledge Pack records: structured paths are the default; JSON remains an expert fallback. */
+.knowledge-guided-form{display:grid;gap:11px;padding:13px;border:1px solid var(--line);border-radius:10px;background:rgba(9,20,29,.56);margin:10px 0 14px}
+.knowledge-guided-form .eyebrow{color:var(--teal);font-size:9px;letter-spacing:.11em}
+.knowledge-guided-form .button{justify-self:start}
+.knowledge-checkbox-row{display:flex;flex-wrap:wrap;gap:9px}
+.knowledge-guided-grid .knowledge-checkbox-row label{display:inline-flex;flex-direction:row;align-items:center;gap:6px;font-size:9px;color:var(--text)}
+.knowledge-guided-grid .knowledge-checkbox-row input{width:auto;accent-color:var(--teal)}
+@media(max-width:760px){.knowledge-guided-form{padding:10px}}
+
+.knowledge-form-error{margin:0;padding:9px 10px;border:1px solid rgba(240,120,130,.35);border-radius:7px;background:rgba(240,120,130,.06);color:#ffadb4;font-size:10px;line-height:1.5}
+.source-version-diff{max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;border:1px solid var(--line);border-radius:8px;background:#07111a;color:#c4d8dc;font:9px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
+
+/* Build 016 — scope and validity filters in the Brand Control Center. */
+.knowledge-filter-panel{margin:13px 17px 0;padding:11px 13px;border:1px solid var(--line);border-radius:8px;background:rgba(8,17,24,.36)}
+.knowledge-filter-panel>summary{cursor:pointer;color:#b8d2d5;font-size:10px;font-weight:700;outline:none}
+.knowledge-filter-panel>summary:focus-visible{outline:2px solid var(--teal);outline-offset:4px;border-radius:3px}
+.knowledge-filter-panel[open]>summary{margin-bottom:12px;color:var(--teal)}
+.knowledge-filter-panel .knowledge-guided-grid{padding-top:3px}
+.knowledge-filter-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}
+.knowledge-filter-footer small{max-width:560px;color:var(--muted);font-size:8px;line-height:1.5}
+@media(max-width:760px){.knowledge-filter-panel{margin-inline:10px}.knowledge-filter-footer{align-items:stretch;flex-direction:column}.knowledge-filter-footer .button{width:100%}}

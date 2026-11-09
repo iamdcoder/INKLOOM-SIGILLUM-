@@ -383,3 +383,205 @@ def test_asset_usage_policy_rejects_unknown_channels_and_invalid_colours():
     codes = {item["code"] for item in errors}
     assert "ASSET_USAGE_CHANNEL_UNKNOWN" in codes
     assert "ASSET_USAGE_PALETTE_INVALID" in codes
+
+
+def test_conflict_validation_detects_overlapping_wildcard_fact_scope(tmp_path):
+    from copy import deepcopy
+    from sigillum.modules.knowledge.brand_pack import BrandPack
+
+    snapshot = BrandPack(root=seed_root()).snapshot()
+    snapshot["facts"] = [
+        {
+            "fact_id": "FACT-A", "subject": "Product A", "predicate": "maximum_saving",
+            "value": 10, "unit": "%", "qualifier": "up_to", "offer_id": "OFFER-A",
+            "channel": "social", "source_precedence": 2, "status": "approved",
+            "valid_from": "2026-01-01T00:00:00+00:00", "valid_until": "2026-12-31T00:00:00+00:00",
+        },
+        {
+            "fact_id": "FACT-B", "subject": "Product A", "predicate": "maximum_saving",
+            "value": 12, "unit": "%", "qualifier": "up_to", "offer_id": "OFFER-A",
+            # An omitted channel is broad scope and therefore overlaps social.
+            "source_precedence": 2, "status": "approved",
+            "valid_from": "2026-02-01T00:00:00+00:00", "valid_until": "2026-11-30T00:00:00+00:00",
+        },
+    ]
+    result = KnowledgePackStore._validate(deepcopy(snapshot), require_identity=True)
+    assert any(item["code"] == "APPROVED_FACT_CONFLICT" for item in result)
+
+
+def test_conflict_validation_does_not_merge_distinct_offer_scopes(tmp_path):
+    from copy import deepcopy
+    from sigillum.modules.knowledge.brand_pack import BrandPack
+
+    snapshot = BrandPack(root=seed_root()).snapshot()
+    first = {
+        "fact_id": "FACT-A", "subject": "Product A", "predicate": "maximum_saving",
+        "value": 10, "unit": "%", "qualifier": "up_to", "offer_id": "OFFER-A",
+        "channel": "social", "source_precedence": 2, "status": "approved",
+        "valid_from": "2026-01-01T00:00:00+00:00", "valid_until": "2026-12-31T00:00:00+00:00",
+    }
+    second = {**first, "fact_id": "FACT-B", "value": 12, "offer_id": "OFFER-B"}
+    snapshot["facts"] = [first, second]
+    result = KnowledgePackStore._validate(deepcopy(snapshot), require_identity=True)
+    assert not any(item["code"] == "APPROVED_FACT_CONFLICT" for item in result)
+
+
+def test_conflict_validation_checks_policy_and_voice_guidance(tmp_path):
+    from copy import deepcopy
+    from sigillum.modules.knowledge.brand_pack import BrandPack
+
+    snapshot = BrandPack(root=seed_root()).snapshot()
+    snapshot["policies"] = [
+        {"policy_id": "POL-A", "name": "Campaign disclaimer", "category": "legal", "rule": "Show disclaimer", "severity": "blocking", "required_action": "disclose", "scope": {"channel": ["social"]}, "status": "approved"},
+        {"policy_id": "POL-B", "name": "Campaign disclaimer", "category": "legal", "rule": "Show disclaimer differently", "severity": "suggestion", "required_action": "remove", "scope": {"channel": ["social", "direct_web"]}, "status": "approved"},
+    ]
+    snapshot["voice"] = {
+        "voice_traits": ["clear"],
+        "approved_examples": [{"example_id": "VOICE-A", "text": "This is the world's best product.", "labels": ["confident"], "locale": "en-IN"}],
+        "disallowed_patterns": [{"pattern_id": "VOICE-P1", "pattern": "world's best", "reason": "Unapproved superlative", "severity": "review_required", "locale": "en-IN"}],
+    }
+    result = KnowledgePackStore._validate(deepcopy(snapshot), require_identity=True)
+    codes = {item["code"] for item in result}
+    assert "APPROVED_POLICY_CONFLICT" in codes
+    assert "APPROVED_VOICE_EXAMPLE_CONFLICT" in codes
+
+
+def test_source_replacement_supersedes_old_record_without_rewriting_history(tmp_path):
+    store = KnowledgePackStore(seed_root(), tmp_path / "packs")
+    draft = store.create_draft("tenant_source_versions", "owner-1")
+    original = {
+        "source_id": "SRC-ORIGINAL", "name": "Product specification", "source_type": "product_specification",
+        "version": 1, "reference_text": "Version one evidence", "sha256": "a" * 64,
+        "status": "draft", "owner_id": "owner-1",
+    }
+    store.append_source("tenant_source_versions", "brand_orbita_demo", draft["draft_id"], original, "owner-1")
+    replacement = {
+        "source_id": "SRC-REPLACEMENT", "name": "Product specification", "source_type": "product_specification",
+        "version": 2, "reference_text": "Version two evidence", "sha256": "b" * 64,
+        "status": "draft", "owner_id": "owner-1",
+    }
+    result = store.append_source_version(
+        "tenant_source_versions", "brand_orbita_demo", draft["draft_id"], "SRC-ORIGINAL", replacement, "owner-1"
+    )
+    source_rows = result["snapshot"]["sources"]["sources"]
+    previous = next(item for item in source_rows if item["source_id"] == "SRC-ORIGINAL")
+    latest = next(item for item in source_rows if item["source_id"] == "SRC-REPLACEMENT")
+    assert previous["status"] == "superseded"
+    assert previous["superseded_by"] == "SRC-REPLACEMENT"
+    assert latest["version"] == 2
+    assert latest["supersedes_source_id"] == "SRC-ORIGINAL"
+    assert all(item.get("source_id") != "SRC-ORIGINAL" for item in store.active_pack("tenant_source_versions").sources["sources"])
+
+
+def test_unpublished_unreferenced_source_can_be_removed_from_draft(tmp_path):
+    store = KnowledgePackStore(seed_root(), tmp_path / "packs")
+    draft = store.create_draft("tenant_source_remove", "owner-1")
+    source = {
+        "source_id": "SRC-DELETE", "name": "Discarded draft source", "source_type": "reference_text",
+        "version": 1, "reference_text": "Temporary text", "status": "draft", "owner_id": "owner-1",
+    }
+    store.append_source("tenant_source_remove", "brand_orbita_demo", draft["draft_id"], source, "owner-1")
+    removed = store.remove_unpublished_source("tenant_source_remove", "brand_orbita_demo", draft["draft_id"], "SRC-DELETE", "owner-1")
+    latest = store.get_draft("tenant_source_remove", draft["draft_id"], "brand_orbita_demo")
+    assert removed["source_id"] == "SRC-DELETE"
+    assert not any(item.get("source_id") == "SRC-DELETE" for item in latest["snapshot"]["sources"]["sources"])
+
+
+def test_source_delete_is_blocked_when_fact_references_it(tmp_path):
+    store = KnowledgePackStore(seed_root(), tmp_path / "packs")
+    draft = store.create_draft("tenant_source_referenced", "owner-1")
+    source = {
+        "source_id": "SRC-REFERENCED", "name": "Evidence source", "source_type": "reference_text",
+        "version": 1, "reference_text": "A quote", "status": "draft", "owner_id": "owner-1",
+    }
+    store.append_source("tenant_source_referenced", "brand_orbita_demo", draft["draft_id"], source, "owner-1")
+    facts = list(draft["snapshot"]["facts"])
+    facts.append({"fact_id": "FACT-REF", "source_ref": {"source_id": "SRC-REFERENCED"}, "status": "draft"})
+    store.update_section("tenant_source_referenced", draft["draft_id"], "facts", facts, "owner-1", "brand_orbita_demo")
+    with pytest.raises(ValueError, match="referenced by fact"):
+        store.remove_unpublished_source("tenant_source_referenced", "brand_orbita_demo", draft["draft_id"], "SRC-REFERENCED", "owner-1")
+
+
+def test_source_history_rejects_broken_successor_links(tmp_path):
+    from sigillum.modules.knowledge.brand_pack import BrandPack
+
+    snapshot = BrandPack(root=seed_root()).snapshot()
+    snapshot["sources"] = {
+        "schema_version": "1.0.0",
+        "sources": [
+            {
+                "source_id": "SRC-V1", "name": "Terms", "source_type": "campaign_terms",
+                "version": 1, "status": "superseded", "superseded_by": "SRC-MISSING",
+            }
+        ],
+    }
+    codes = {item["code"] for item in KnowledgePackStore._validate(snapshot, require_identity=True)}
+    assert "SOURCE_LINEAGE_INCONSISTENT" in codes
+
+
+def test_deleting_latest_source_version_restores_prior_owner_approved_version(tmp_path):
+    store = KnowledgePackStore(seed_root(), tmp_path / "packs")
+    draft = store.create_draft("tenant_source_restore", "owner-1")
+    original = {
+        "source_id": "SRC-RESTORE-V1", "name": "Warranty Terms", "source_type": "campaign_terms",
+        "version": 1, "reference_text": "Warranty is 24 months.", "sha256": "a" * 64,
+        "status": "approved", "approved_by": "owner-1", "approved_at": "2026-11-09T00:00:00+00:00",
+        "owner_id": "owner-1",
+    }
+    store.append_source("tenant_source_restore", "brand_orbita_demo", draft["draft_id"], original, "owner-1")
+    replacement = {
+        "source_id": "SRC-RESTORE-V2", "name": "Warranty Terms", "source_type": "campaign_terms",
+        "version": 2, "reference_text": "Warranty is 36 months.", "sha256": "b" * 64,
+        "status": "draft", "owner_id": "owner-1",
+    }
+    store.append_source_version(
+        "tenant_source_restore", "brand_orbita_demo", draft["draft_id"], "SRC-RESTORE-V1", replacement, "owner-1"
+    )
+    with pytest.raises(ValueError, match="successor version"):
+        store.remove_unpublished_source("tenant_source_restore", "brand_orbita_demo", draft["draft_id"], "SRC-RESTORE-V1", "owner-1")
+
+    store.remove_unpublished_source("tenant_source_restore", "brand_orbita_demo", draft["draft_id"], "SRC-RESTORE-V2", "owner-1")
+    restored = store.get_draft("tenant_source_restore", draft["draft_id"], "brand_orbita_demo")
+    rows = restored["snapshot"]["sources"]["sources"]
+    assert len([item for item in rows if item.get("source_id") == "SRC-RESTORE-V1"]) == 1
+    source = next(item for item in rows if item.get("source_id") == "SRC-RESTORE-V1")
+    assert source["status"] == "approved"
+    assert source["approved_by"] == "owner-1"
+    assert "superseded_by" not in source
+    assert "superseded_from_status" not in source
+
+
+def test_policy_schema_validation_rejects_empty_rule_and_invalid_interval(tmp_path):
+    from sigillum.modules.knowledge.brand_pack import BrandPack
+
+    snapshot = BrandPack(root=seed_root()).snapshot()
+    snapshot["policies"] = [{
+        "policy_id": "POL-BAD", "name": "Missing rule", "rule": "", "category": "claims",
+        "severity": "blocking", "required_action": "invent", "scope": {"channel": ["social", ""]},
+        "valid_from": "2026-11-10T00:00:00+00:00", "valid_until": "2026-11-01T00:00:00+00:00",
+        "status": "draft",
+    }]
+    codes = {item["code"] for item in KnowledgePackStore._validate(snapshot, require_identity=True)}
+    assert {"POLICY_RULE_REQUIRED", "POLICY_ACTION_INVALID", "POLICY_SCOPE_VALUE_INVALID", "POLICY_VALIDITY_INTERVAL_INVALID"} <= codes
+
+
+def test_terminology_conflicts_respect_locale_and_scope_and_validate_links(tmp_path):
+    from sigillum.modules.knowledge.brand_pack import BrandPack
+
+    snapshot = BrandPack(root=seed_root()).snapshot()
+    snapshot["terminology"] = {
+        "schema_version": "1.0.0",
+        "preferred_terms": [
+            {"term_id": "TERM-A", "preferred": "ORBITA Air One", "locale": "en-IN", "scope": ["OFFER-A"], "status": "approved"},
+        ],
+        "prohibited_or_review_terms": [
+            {"term_id": "TERM-B", "variant": "ORBITA Air One", "preferred_term_id": "MISSING", "locale": "en-IN", "scope": ["OFFER-B"], "reason": "test", "severity": "review_required", "status": "approved"},
+        ],
+    }
+    codes = {item["code"] for item in KnowledgePackStore._validate(snapshot, require_identity=True)}
+    assert "TERMINOLOGY_PREFERRED_REFERENCE_MISSING" in codes
+    assert "APPROVED_TERMINOLOGY_CONFLICT" not in codes
+
+    snapshot["terminology"]["prohibited_or_review_terms"][0]["scope"] = ["OFFER-A"]
+    codes = {item["code"] for item in KnowledgePackStore._validate(snapshot, require_identity=True)}
+    assert "APPROVED_TERMINOLOGY_CONFLICT" in codes

@@ -31,6 +31,7 @@ import {
   parseSessionUser,
   subscribeToSession,
 } from "@/lib/api";
+import KnowledgeRecordForms from "@/components/knowledge-record-forms";
 
 type Brand = {
   brand_name: string;
@@ -73,6 +74,8 @@ type SourceRecord = {
   extraction_warnings?: string[];
   region_count?: number;
   reference_text?: string | null;
+  supersedes_source_id?: string | null;
+  superseded_by?: string | null;
 };
 
 type AssetRecord = {
@@ -141,6 +144,18 @@ type VersionComparison = {
   }>;
 };
 
+type SourceVersionComparison = {
+  draft_id: string;
+  from: { source_id: string; name: string; version: number; status: string; file_sha256?: string | null };
+  to: { source_id: string; name: string; version: number; status: string; file_sha256?: string | null };
+  comparison_available: boolean;
+  diff: string;
+  diff_truncated: boolean;
+  added_line_count: number;
+  removed_line_count: number;
+  warnings: string[];
+};
+
 type SourceExtraction = {
   text_characters: number;
   regions_total: number;
@@ -157,6 +172,61 @@ type ValidationResult = {
 };
 
 type SectionKey = keyof PackSnapshot;
+type RecordFilters = {
+  search: string;
+  product: string;
+  channel: string;
+  locale: string;
+  geography: string;
+  audience: string;
+  owner: string;
+  validity: "all" | "current" | "expired" | "future" | "unspecified";
+};
+
+const EMPTY_RECORD_FILTERS: RecordFilters = {
+  search: "", product: "", channel: "", locale: "", geography: "", audience: "", owner: "", validity: "all",
+};
+
+function filterValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.map(filterValue).join(" ");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function recordMatchesFilters(record: Record<string, unknown>, filters: RecordFilters): boolean {
+  const scope = record.scope && typeof record.scope === "object" && !Array.isArray(record.scope)
+    ? record.scope as Record<string, unknown> : {};
+  const includes = (values: unknown[], query: string) => {
+    if (!query.trim()) return true;
+    return values.map(filterValue).join(" ").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  };
+  if (!includes([record], filters.search)) return false;
+  if (!includes([record.product, record.product_id, record.product_ids, record.subject, record.offer_id, record.campaign_id, scope.product, scope.product_id], filters.product)) return false;
+  if (!includes([record.channel, record.channels, scope.channel, scope.channels], filters.channel)) return false;
+  if (!includes([record.locale, scope.locale], filters.locale)) return false;
+  if (!includes([record.geography, record.region, scope.geography, scope.region], filters.geography)) return false;
+  if (!includes([record.audience, scope.audience], filters.audience)) return false;
+  if (!includes([record.owner_id, record.owner, record.created_by, record.approved_by, record.uploaded_by], filters.owner)) return false;
+
+  if (filters.validity !== "all") {
+    const rawFrom = record.valid_from ?? record.effective_from;
+    const rawUntil = record.valid_until ?? record.effective_until;
+    const hasDates = Boolean(rawFrom || rawUntil);
+    if (filters.validity === "unspecified" && hasDates) return false;
+    if (filters.validity !== "unspecified") {
+      if (!hasDates) return false;
+      const now = Date.now();
+      const from = rawFrom ? new Date(String(rawFrom)).getTime() : Number.NEGATIVE_INFINITY;
+      const until = rawUntil ? new Date(String(rawUntil)).getTime() : Number.POSITIVE_INFINITY;
+      if ((rawFrom && !Number.isFinite(from)) || (rawUntil && !Number.isFinite(until))) return false;
+      if (filters.validity === "current" && !(from <= now && until >= now)) return false;
+      if (filters.validity === "expired" && !(until < now)) return false;
+      if (filters.validity === "future" && !(from > now)) return false;
+    }
+  }
+  return true;
+}
 
 const SECTIONS: Array<{ key: SectionKey; label: string; description: string }> = [
   { key: "facts", label: "Approved facts", description: "Atomic claims, values, qualifiers, source references and validity." },
@@ -200,10 +270,13 @@ export default function BrandPage() {
   const [sourceText, setSourceText] = useState("");
   const [sourceUri, setSourceUri] = useState("");
   const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [replaceSourceId, setReplaceSourceId] = useState("");
   const [sourceExtraction, setSourceExtraction] = useState<{ sourceId: string; manifest: SourceExtraction } | null>(null);
+  const [sourceComparison, setSourceComparison] = useState<SourceVersionComparison | null>(null);
   const [compareFrom, setCompareFrom] = useState("");
   const [compareTo, setCompareTo] = useState("");
   const [comparison, setComparison] = useState<VersionComparison | null>(null);
+  const [recordFilters, setRecordFilters] = useState<RecordFilters>(EMPTY_RECORD_FILTERS);
   const [assetName, setAssetName] = useState("");
   const [assetKind, setAssetKind] = useState("logo");
   const [assetFile, setAssetFile] = useState<File | null>(null);
@@ -417,20 +490,46 @@ export default function BrandPage() {
       } catch {
         throw new Error("The editor contains invalid JSON. Correct the syntax before saving.");
       }
-      await api(`/brands/current/drafts/${draft.draft_id}/section`, {
+      const saved = await api<{ status: string; content: unknown }>(`/brands/current/drafts/${draft.draft_id}/section`, {
         method: "PUT",
         body: JSON.stringify({ section: activeSection, content }),
       });
       setDraft((current) => current ? {
         ...current,
-        status: "DRAFT",
-        snapshot: { ...current.snapshot, [activeSection]: content } as PackSnapshot,
+        status: saved.status,
+        snapshot: { ...current.snapshot, [activeSection]: saved.content } as PackSnapshot,
       } : current);
-      setEditorText(JSON.stringify(content, null, 2));
+      setEditorText(JSON.stringify(saved.content, null, 2));
       setValidation(null);
       setNotice(`${SECTIONS.find((section) => section.key === activeSection)?.label || activeSection} saved to the draft. The active pack has not changed.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to save this section.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveGuidedSection(section: "facts" | "policies" | "terminology" | "voice", content: unknown, message: string) {
+    if (!draft) throw new Error("Create or open a draft before adding Knowledge Pack records.");
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const saved = await api<{ status: string; content: unknown }>(`/brands/current/drafts/${draft.draft_id}/section`, {
+        method: "PUT",
+        body: JSON.stringify({ section, content }),
+      });
+      setDraft((current) => current ? {
+        ...current,
+        status: saved.status,
+        snapshot: { ...current.snapshot, [section]: saved.content } as PackSnapshot,
+      } : current);
+      if (activeSection === section) setEditorText(JSON.stringify(saved.content, null, 2));
+      setValidation(null);
+      setNotice(message);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to save this Knowledge Pack record.");
+      throw reason;
     } finally {
       setBusy(false);
     }
@@ -490,22 +589,52 @@ export default function BrandPage() {
       form.append("name", sourceName.trim());
       form.append("source_type", sourceType);
       form.append("version", "1");
-      const result = await api<{ source: SourceRecord }>(`/brands/current/drafts/${draft.draft_id}/sources/upload`, {
+      const endpoint = replaceSourceId
+        ? `/brands/current/drafts/${draft.draft_id}/sources/${replaceSourceId}/versions/upload`
+        : `/brands/current/drafts/${draft.draft_id}/sources/upload`;
+      const result = await api<{ source: SourceRecord; superseded_source_id?: string }>(endpoint, {
         method: "POST",
         body: form,
       });
-      const registry = draft.snapshot.sources || { schema_version: "1.0.0", sources: [] };
-      const nextRegistry = { ...registry, sources: [...registry.sources, result.source] };
-      setDraft((current) => current ? { ...current, status: "DRAFT", snapshot: { ...current.snapshot, sources: nextRegistry } } : current);
-      if (activeSection === "sources") setEditorText(JSON.stringify(nextRegistry, null, 2));
+      const latest = await api<DraftPayload>(`/brands/current/drafts/${draft.draft_id}`);
+      setDraft(latest);
+      setEditorText(JSON.stringify(latest.snapshot.sources || {}, null, 2));
+      setReplaceSourceId("");
       setSourceFile(null);
       setSourceName("");
       setValidation(null);
-      setNotice(result.source.scan_status === "CLEAN"
-        ? "Source uploaded, malware-scanned and extracted. It is still non-authoritative until owner approval and pack publication."
-        : `Source uploaded to quarantine. Scanner status: ${result.source.scan_status || "PENDING"}. It cannot be approved or downloaded until scanning succeeds.`);
+      setNotice(result.superseded_source_id
+        ? `Source v${result.source.version} uploaded. Previous version ${result.superseded_source_id} is superseded in this draft; historic published versions remain unchanged. New source approval and publication are required.`
+        : result.source.scan_status === "CLEAN"
+          ? "Source uploaded, malware-scanned and extracted. It is still non-authoritative until owner approval and pack publication."
+          : `Source uploaded to quarantine. Scanner status: ${result.source.scan_status || "PENDING"}. It cannot be approved or downloaded until scanning succeeds.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to upload the source document.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteDraftSource(sourceId: string) {
+    if (!draft) return;
+    const confirmed = window.confirm("Delete this unpublished source and its private upload, if no published version or fact depends on it?");
+    if (!confirmed) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{ deleted: boolean; binary_cleanup_pending: boolean }>(
+        `/brands/current/drafts/${draft.draft_id}/sources/${sourceId}`, { method: "DELETE" },
+      );
+      const latest = await api<DraftPayload>(`/brands/current/drafts/${draft.draft_id}`);
+      setDraft(latest);
+      setEditorText(JSON.stringify(latest.snapshot[activeSection] ?? {}, null, 2));
+      setValidation(null);
+      setNotice(result.binary_cleanup_pending
+        ? "Source removed from the draft. Private object deletion needs administrator cleanup; an audit event was recorded."
+        : "Unpublished source and unreferenced private objects deleted. Published source history was not changed.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to delete this source.");
     } finally {
       setBusy(false);
     }
@@ -527,6 +656,23 @@ export default function BrandPage() {
       setNotice(`Source scan: ${result.scan_status}. Extraction: ${result.extraction_status}.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to rescan this source document.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function compareSourceVersions(sourceId: string) {
+    if (!draft) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<SourceVersionComparison>(
+        `/brands/current/drafts/${draft.draft_id}/sources/${sourceId}/versions/compare`,
+      );
+      setSourceComparison(result);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to compare source versions.");
     } finally {
       setBusy(false);
     }
@@ -731,6 +877,16 @@ export default function BrandPage() {
     ...((terminology.preferred_terms as Array<Record<string, unknown> & { term_id?: string; preferred?: string; status?: string }> | undefined) || []),
     ...((terminology.prohibited_or_review_terms as Array<Record<string, unknown> & { term_id?: string; variant?: string; status?: string }> | undefined) || []),
   ];
+  const visibleFacts = draftFacts.filter((record) => recordMatchesFilters(record, recordFilters));
+  const visiblePolicies = draftPolicies.filter((record) => recordMatchesFilters(record, recordFilters));
+  const visibleTerms = draftTerms.filter((record) => recordMatchesFilters(record, recordFilters));
+  const visibleAssets = draftAssets.filter((record) => recordMatchesFilters(record as unknown as Record<string, unknown>, recordFilters));
+  const visibleSources = draftSources.filter((record) => recordMatchesFilters(record as unknown as Record<string, unknown>, recordFilters));
+  const voiceExamples = ((draft?.snapshot.voice.approved_examples as Array<Record<string, unknown>> | undefined) || [])
+    .filter((record) => recordMatchesFilters(record, recordFilters));
+  const voicePatterns = ((draft?.snapshot.voice.disallowed_patterns as Array<Record<string, unknown>> | undefined) || [])
+    .filter((record) => recordMatchesFilters(record, recordFilters));
+  const filtersActive = Object.entries(recordFilters).some(([key, value]) => key === "validity" ? value !== "all" : Boolean(value.trim()));
 
   return (
     <div className="page-stack">
@@ -857,6 +1013,23 @@ export default function BrandPage() {
           ) : (
             <>
               <div className="draft-context"><div><small>DRAFT ID</small><b>{draft.draft_id}</b></div><div><small>BASED ON</small><b>{draft.base_version_id}</b></div><div><small>ACTIVE VERSION</small><b>{management.active_version.version_id}</b></div></div>
+              <details className="knowledge-filter-panel">
+                <summary>Filter records by product, channel, locale, geography, audience, owner and validity</summary>
+                <div className="knowledge-guided-grid">
+                  <label>Search records<input value={recordFilters.search} onChange={(event) => setRecordFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Name, ID, text, source…" /></label>
+                  <label>Product / offer<input value={recordFilters.product} onChange={(event) => setRecordFilters((current) => ({ ...current, product: event.target.value }))} placeholder="Product or offer ID" /></label>
+                  <label>Channel<input value={recordFilters.channel} onChange={(event) => setRecordFilters((current) => ({ ...current, channel: event.target.value }))} placeholder="direct_web, social…" /></label>
+                  <label>Locale<input value={recordFilters.locale} onChange={(event) => setRecordFilters((current) => ({ ...current, locale: event.target.value }))} placeholder="en-IN" /></label>
+                  <label>Geography<input value={recordFilters.geography} onChange={(event) => setRecordFilters((current) => ({ ...current, geography: event.target.value }))} placeholder="IN" /></label>
+                  <label>Audience<input value={recordFilters.audience} onChange={(event) => setRecordFilters((current) => ({ ...current, audience: event.target.value }))} placeholder="consumer" /></label>
+                  <label>Owner / approver<input value={recordFilters.owner} onChange={(event) => setRecordFilters((current) => ({ ...current, owner: event.target.value }))} placeholder="User ID" /></label>
+                  <label>Validity<select value={recordFilters.validity} onChange={(event) => setRecordFilters((current) => ({ ...current, validity: event.target.value as RecordFilters["validity"] }))}><option value="all">All validity states</option><option value="current">Currently valid</option><option value="expired">Expired</option><option value="future">Future effective</option><option value="unspecified">No validity dates</option></select></label>
+                </div>
+                <div className="knowledge-filter-footer">
+                  <small>Filters apply to the records in the selected section. Scope dimensions not present on a record do not match a non-empty filter.</small>
+                  <button className="button secondary" type="button" onClick={() => setRecordFilters(EMPTY_RECORD_FILTERS)} disabled={!filtersActive}>Clear filters</button>
+                </div>
+              </details>
               <div className="knowledge-editor-layout">
                 <nav className="knowledge-section-nav" aria-label="Knowledge Pack sections">
                   {SECTIONS.map((section) => (
@@ -872,8 +1045,10 @@ export default function BrandPage() {
                     <div className="knowledge-guided-panel">
                       <div className="eyebrow">FACT APPROVAL REGISTER</div>
                       <p className="knowledge-guided-note">Only facts with approved, version-matched source evidence can pass publication validation. Draft facts are never authoritative.</p>
+                      <KnowledgeRecordForms section="facts" snapshot={draft.snapshot} sources={draftSources} channels={summary?.brand.channels || []} disabled={busy} onSave={saveGuidedSection} />
                       <div className="knowledge-record-list">
-                        {draftFacts.map((fact, index) => {
+                        <p className="knowledge-guided-note">Showing {visibleFacts.length} of {draftFacts.length} fact record(s).</p>
+                        {visibleFacts.map((fact, index) => {
                           const id = String(fact.fact_id || `fact-${index}`);
                           const status = String(fact.status || "draft");
                           return (
@@ -885,7 +1060,7 @@ export default function BrandPage() {
                             </div>
                           );
                         })}
-                        {draftFacts.length === 0 && <p className="knowledge-guided-empty">No facts have been registered for this brand.</p>}
+                        {visibleFacts.length === 0 && <p className="knowledge-guided-empty">{draftFacts.length ? "No facts match the current filters." : "No facts have been registered for this brand."}</p>}
                       </div>
                     </div>
                   )}
@@ -893,8 +1068,10 @@ export default function BrandPage() {
                     <div className="knowledge-guided-panel">
                       <div className="eyebrow">POLICY APPROVAL REGISTER</div>
                       <p className="knowledge-guided-note">Policy rules and severity are owner-governed. Rejected or draft policies do not govern a published pack.</p>
+                      <KnowledgeRecordForms section="policies" snapshot={draft.snapshot} sources={draftSources} channels={summary?.brand.channels || []} disabled={busy} onSave={saveGuidedSection} />
                       <div className="knowledge-record-list">
-                        {draftPolicies.map((policy, index) => {
+                        <p className="knowledge-guided-note">Showing {visiblePolicies.length} of {draftPolicies.length} policy clause(s).</p>
+                        {visiblePolicies.map((policy, index) => {
                           const id = String(policy.policy_id || `policy-${index}`);
                           const status = String(policy.status || "draft");
                           return (
@@ -906,7 +1083,7 @@ export default function BrandPage() {
                             </div>
                           );
                         })}
-                        {draftPolicies.length === 0 && <p className="knowledge-guided-empty">No policies have been registered for this brand.</p>}
+                        {visiblePolicies.length === 0 && <p className="knowledge-guided-empty">{draftPolicies.length ? "No policies match the current filters." : "No policies have been registered for this brand."}</p>}
                       </div>
                     </div>
                   )}
@@ -914,8 +1091,10 @@ export default function BrandPage() {
                     <div className="knowledge-guided-panel">
                       <div className="eyebrow">TERMINOLOGY APPROVAL REGISTER</div>
                       <p className="knowledge-guided-note">Canonical terms and prohibited variants are kept distinct from factual evidence. Owner decisions apply only after publication.</p>
+                      <KnowledgeRecordForms section="terminology" snapshot={draft.snapshot} sources={draftSources} channels={summary?.brand.channels || []} disabled={busy} onSave={saveGuidedSection} />
                       <div className="knowledge-record-list">
-                        {draftTerms.map((term, index) => {
+                        <p className="knowledge-guided-note">Showing {visibleTerms.length} of {draftTerms.length} terminology record(s).</p>
+                        {visibleTerms.map((term, index) => {
                           const id = String(term.term_id || `term-${index}`);
                           const status = String(term.status || "draft");
                           const termText = String(term.preferred || term.variant || id);
@@ -928,7 +1107,24 @@ export default function BrandPage() {
                             </div>
                           );
                         })}
-                        {draftTerms.length === 0 && <p className="knowledge-guided-empty">No terminology records have been registered for this brand.</p>}
+                        {visibleTerms.length === 0 && <p className="knowledge-guided-empty">{draftTerms.length ? "No terminology records match the current filters." : "No terminology records have been registered for this brand."}</p>}
+                      </div>
+                    </div>
+                  )}
+                  {activeSection === "voice" && (
+                    <div className="knowledge-guided-panel">
+                      <div className="eyebrow">VOICE GUIDANCE REGISTER</div>
+                      <p className="knowledge-guided-note">Voice guidance is an editorial signal. Entries stay in this draft until the Brand Owner validates and publishes the Knowledge Pack.</p>
+                      <KnowledgeRecordForms section="voice" snapshot={draft.snapshot} sources={draftSources} channels={summary?.brand.channels || []} disabled={busy} onSave={saveGuidedSection} />
+                      <div className="knowledge-record-list">
+                        <div className="knowledge-record-row"><div><b>Voice traits</b><small>{Array.isArray(draft.snapshot.voice.voice_traits) ? (draft.snapshot.voice.voice_traits as unknown[]).join(" · ") : "No traits"}</small></div></div>
+                        <p className="knowledge-guided-note">Showing {voiceExamples.length + voicePatterns.length} of {((draft.snapshot.voice.approved_examples as unknown[] | undefined) || []).length + ((draft.snapshot.voice.disallowed_patterns as unknown[] | undefined) || []).length} voice example/pattern record(s).</p>
+                        {voiceExamples.map((item, index) => (
+                          <div className="knowledge-record-row" key={String(item.example_id || index)}><div><b>Approved example</b><small>{String(item.text || "")}</small><small>{Array.isArray(item.labels) ? (item.labels as unknown[]).join(" · ") : ""}</small></div></div>
+                        ))}
+                        {voicePatterns.map((item, index) => (
+                          <div className="knowledge-record-row" key={String(item.pattern_id || index)}><div><b>{String(item.pattern || "Disallowed pattern")}</b><small>{String(item.reason || "No rationale supplied")} · {String(item.severity || "review_required")}</small></div></div>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -946,11 +1142,13 @@ export default function BrandPage() {
                       <div className="knowledge-source-upload">
                         <div className="eyebrow">CONTROLLED DOCUMENT INTAKE</div>
                         <p className="knowledge-guided-note">PDF and DOCX uploads are stored privately, malware-scanned before parsing, and kept non-authoritative until explicit owner approval and publication. Scanner outage leaves the file quarantined.</p>
+                        <label>Replace an existing source version (optional)<select value={replaceSourceId} onChange={(event) => { setReplaceSourceId(event.target.value); const selected = draftSources.find((item) => item.source_id === event.target.value); if (selected) { setSourceName(selected.name); setSourceType(selected.source_type); } }}><option value="">Register as a new source</option>{draftSources.filter((item) => item.status !== "superseded").map((item) => <option key={item.source_id} value={item.source_id}>{item.name} · v{item.version} · {item.source_id}</option>)}</select></label>
                         <label>PDF or DOCX source file<input type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" onChange={(event) => setSourceFile(event.target.files?.[0] || null)} /></label>
-                        <button className="button secondary" onClick={uploadSourceDocument} disabled={busy || !sourceFile || !sourceName.trim()}><UploadCloud size={14} /> Upload and scan source</button>
+                        <button className="button secondary" onClick={uploadSourceDocument} disabled={busy || !sourceFile || (!replaceSourceId && !sourceName.trim())}><UploadCloud size={14} /> {replaceSourceId ? "Upload next source version" : "Upload and scan source"}</button>
                       </div>
                       <div className="knowledge-record-list">
-                        {draftSources.map((source) => (
+                        <p className="knowledge-guided-note">Showing {visibleSources.length} of {draftSources.length} source record(s).</p>
+                        {visibleSources.map((source) => (
                           <div className="knowledge-record-row" key={source.source_id}>
                             <div><b>{source.name}</b><small>{source.source_id} · v{source.version} · {source.source_type}</small><small>{source.sha256 ? `SHA-256 ${shortHash(source.sha256)}` : source.source_uri || "Reference text retained in registry"}</small>
                               {source.storage_key && <small>Malware scan: {source.scan_status || "PENDING"} · extraction: {source.extraction_status || "PENDING"} · {source.region_count || 0} region(s)</small>}
@@ -960,12 +1158,21 @@ export default function BrandPage() {
                             {source.storage_key && <span className={`status-pill ${source.scan_status === "CLEAN" ? "success" : "warning"}`}><i />{source.scan_status || "PENDING"}</span>}
                             {source.storage_key && source.scan_status !== "CLEAN" && <button className="button secondary" onClick={() => rescanSourceDocument(source.source_id)} disabled={busy}>Retry scan</button>}
                             {source.storage_key && source.scan_status === "CLEAN" && <><button className="button secondary" onClick={() => openSourceExtraction(source.source_id)} disabled={busy}>View extraction</button><button className="button secondary" onClick={() => downloadSourceDocument(source)}>Download</button></>}
+                            {(source.supersedes_source_id || source.superseded_by) && <button className="button secondary" onClick={() => compareSourceVersions(source.source_id)} disabled={busy}>Compare source versions</button>}
                             {source.status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("source", source.source_id, "approved")} disabled={busy || Boolean(source.storage_key && (source.scan_status !== "CLEAN" || source.extraction_status !== "COMPLETED"))}>Approve</button>}
                             {source.status !== "rejected" && <button className="button secondary" onClick={() => decideKnowledgeRecord("source", source.source_id, "rejected")} disabled={busy}>Reject</button>}
+                            {source.status !== "approved" && <button className="button secondary" onClick={() => deleteDraftSource(source.source_id)} disabled={busy}>Delete draft source</button>}
                           </div>
                         ))}
                         {draftSources.length === 0 && <p className="knowledge-guided-empty">No sources registered in this draft yet.</p>}
                       </div>
+                      {sourceComparison && <div className="knowledge-source-extraction">
+                        <div className="knowledge-editor-toolbar"><b>Source version comparison · v{sourceComparison.from.version} → v{sourceComparison.to.version}</b><button className="button secondary" onClick={() => setSourceComparison(null)}>Close</button></div>
+                        <p className="knowledge-guided-note">{sourceComparison.removed_line_count} removed line(s) · {sourceComparison.added_line_count} added line(s). This compares retained extracted/reference text; it does not certify the underlying source as authoritative.</p>
+                        {sourceComparison.warnings.map((warning) => <small className="text-warning" key={warning}>{warning}</small>)}
+                        {sourceComparison.comparison_available ? <pre className="source-version-diff">{sourceComparison.diff || "No text changes detected."}</pre> : <p className="knowledge-guided-note">Textual comparison is unavailable because one or both versions have no retained text.</p>}
+                        {sourceComparison.diff_truncated && <small className="text-warning">The displayed diff was truncated to keep the response bounded.</small>}
+                      </div>}
                       {sourceExtraction && <div className="knowledge-source-extraction">
                         <div className="knowledge-editor-toolbar"><b>Extracted source regions · {sourceExtraction.sourceId}</b><button className="button secondary" onClick={() => setSourceExtraction(null)}>Close</button></div>
                         <p className="knowledge-guided-note">{sourceExtraction.manifest.text_characters} characters · {sourceExtraction.manifest.regions_returned}/{sourceExtraction.manifest.regions_total} regions retained.</p>
@@ -1001,7 +1208,8 @@ export default function BrandPage() {
                       <p className="knowledge-guided-note">PNG, JPEG or WebP only. SVG/script-bearing files are rejected. Uploads remain private and unapproved until an owner decision. Raster decoding, size checks and fail-closed malware scanning are applied.</p>
                       <button className="button secondary" onClick={uploadBrandAsset} disabled={busy || !assetFile}><UploadCloud size={14} /> Upload as draft asset</button>
                       <div className="knowledge-record-list">
-                        {draftAssets.map((asset) => (
+                        <p className="knowledge-guided-note">Showing {visibleAssets.length} of {draftAssets.length} asset record(s).</p>
+                        {visibleAssets.map((asset) => (
                           <div className="knowledge-record-row asset-row" key={asset.asset_id}>
                             {assetPreviews[asset.asset_id] ? <img src={assetPreviews[asset.asset_id]} alt={`Preview of ${asset.name}`} /> : <div className="knowledge-asset-placeholder"><ShieldCheck size={17} /></div>}
                             <div><b>{asset.name}</b><small>{asset.asset_id} · {asset.kind} · {asset.mime_type || "legacy asset"}</small><small>{asset.sha256 ? `SHA-256 ${shortHash(asset.sha256)}` : "Seeded asset record"}</small></div>

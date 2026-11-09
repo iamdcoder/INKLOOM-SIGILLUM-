@@ -1,7 +1,23 @@
 # Verification record — current MVP
 
-**Latest update:** 2026-11-09, Build 015. Older entries below are retained as historical checkpoints; current results are summarised first.
+**Latest update:** 2026-11-09, Build 016. Older entries below are retained as historical checkpoints; current results are summarised first.
 
+
+## Build 016 — Phase 04 Knowledge Pack completion
+
+| Check | Result | Notes |
+|---|---|---|
+| `pytest -o addopts='' -q -ra` | **132 passed, 2 skipped, 0 failed (134 collected)** | Local SQLite suite. Skips are PostgreSQL-only RLS and concurrent-publication checks. |
+| Python `compileall` | **Passed** | Backend, apps, migrations, tests and scripts. |
+| Alembic/database verifier | **Passed** | SQLite current at `20261109_0005`; all 16 required tables present. |
+| Golden evaluation | **11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL** | 12 deterministic synthetic cases; manual visual case is intentional. |
+| TypeScript syntax parsing | **Passed** | `apps/web/app/brand/page.tsx` and `apps/web/components/knowledge-record-forms.tsx`; syntax only, not a project typecheck. |
+| CI workflow YAML | **Parsed** | Jobs: backend, backend-postgres, clamav-live, frontend. A parsed workflow is not a passing run. |
+| `npm run lint` | **Could not start** | Local project `eslint` executable is absent (`eslint: not found`). |
+| Frontend typecheck / production build | **Not verified** | Local dependency toolchain unavailable; CI is configured but not observed passing. |
+| Live PostgreSQL RLS/concurrency and ClamAV | **Not run locally** | No Docker/psql/live scanner available in this authoring environment; dedicated CI jobs configured. |
+
+Build 016 closes the Phase 04 implementation scope: guided owner create forms, exact approved-source provenance for new facts/policies, broader scoped conflicts, owner search/filters, guarded source replacement, bounded source compare, safe draft-only source deletion and concurrent-publication CI coverage. See `docs/technical/BUILD_016_PHASE04_COMPLETION.md` and `docs/phase-gates/PHASE-04-STATUS.md`.
 
 ## Build 015 — asset usage policies and intended-use context
 

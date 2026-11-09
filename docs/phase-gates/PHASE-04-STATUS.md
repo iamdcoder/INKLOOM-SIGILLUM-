@@ -1,85 +1,100 @@
 # Phase 04 — Brand Control Center and Knowledge Pack lifecycle
 
-**Current status:** CORE WORKFLOW PARTIALLY IMPLEMENTED — database catalogue, explicit owner decisions, controlled PDF/DOCX source intake, fail-closed malware gates, immutable version comparison and deterministic owner-configurable asset usage policies are implemented. **Not signed off.**  
-**Implementation baseline:** Build 015, cumulative from Build 014.  
+**Implementation status: COMPLETE in Build 016.**  
+**Local acceptance: PASSED** for the available SQLite backend/unit/integration environment.  
+**External operational acceptance: PENDING** for hosted PostgreSQL RLS/concurrency, a live ClamAV daemon, and the full frontend lint/typecheck/production build.  
 **Database migration head:** `20261109_0005`.  
-**Gate:** Owner-controlled and provenance-preserving Knowledge Pack lifecycle. Live PostgreSQL RLS/concurrency, live ClamAV and full frontend quality evidence remain outstanding, as do fully guided forms and broader conflict/source lifecycle controls.
+**Cumulative baseline:** Build 016 (Build 001–016).
 
-## Product objective
+> This is a deliberate distinction: Phase 04's application workflow and acceptance fixtures are implemented and pass locally. External environment checks are configured in CI but have not yet produced observed run results. Do not treat a workflow definition as a passing CI run.
 
-Create the organisation-owned source of truth used by claim, terminology, tone and visual checks. A record may influence future reviews only after it is owner-approved and its containing immutable Knowledge Pack version is published.
+## Product objective and phase exit gate
 
-## Implemented capability
+Create the organisation-owned source of truth used by claim, terminology, tone and visual checks. A record may influence future reviews only after it is owner-approved and its containing immutable Knowledge Pack version is validated and published.
 
-- [x] Tenant and brand scoped pack namespaces, active heads and version histories.
-- [x] Separate pack IDs for distinct brands in the same tenant; new non-demo brands start with empty brand truth.
-- [x] One-time Build 007–012 compatibility import of the original brand's published history, active pointer and eligible drafts with fingerprint checks.
-- [x] Database-backed immutable snapshots, drafts, active-version pointer and append-only record-decision history; filesystem JSON remains a repairable mirror.
-- [x] Draft revision compare-and-swap and guarded publication with PostgreSQL row locks and conditional head updates in code.
-- [x] Brand Control Center sections for facts, policies, terminology, voice, approved assets and sources.
-- [x] Manual source registration with exact retained excerpt and/or URI provenance. Remote source URIs are never fetched automatically.
-- [x] **Build 014:** controlled Brand Owner-only PDF/DOCX upload with file signature validation, size cap, private tenant+brand+draft storage namespace and original SHA-256.
-- [x] **Build 014:** fail-closed ClamAV `INSTREAM` scanner for Knowledge Pack source documents and uploaded PNG/JPEG/WebP assets. `INFECTED`, `UNAVAILABLE` and `ERROR` are explicit non-clean states.
-- [x] **Build 014:** source parsing runs only after a CLEAN malware scan. It stores a bounded extraction manifest with logical text regions, warnings and parser confidence; it does not expose private storage keys.
-- [x] **Build 014:** source download, extraction inspection and approval are blocked until scanner status is CLEAN; uploaded document approval also requires complete non-empty extraction. Owners can retry scanning after service recovery.
-- [x] **Build 014:** asset preview/approval are blocked until scan status is CLEAN. Rescanning to a non-clean state suspends the draft asset's previous approval.
-- [x] **Build 014:** generic JSON editor cannot inject approval metadata, source binary hashes, storage keys, upload identity, malware results or uploaded-source extraction metadata. Editing an approved record downgrades it to draft for explicit re-approval.
-- [x] Owner approve/reject actions for facts, policies, terminology, sources and assets require a decision reason. Approval applies only to the draft until the owner publishes.
-- [x] Approved facts require approved source record, exact version and quote traceability; URI-only provenance does not independently substantiate an exact quote.
-- [x] **Build 014:** record-level immutable version diff API and Brand Control Center view; sensitive private storage references are redacted and values bounded.
-- [x] **Build 015:** owner-configurable usage policies per asset kind: allowed brand channels, allowed declared uses, minimum pixel dimensions, allowed six-digit palette colours, RGB-distance tolerance, minimum measured palette coverage, publication validity window and policy severity.
-- [x] **Build 015:** bounded palette extraction is stored when brand raster assets are uploaded; palette validation checks measured coverage and reports `ASSET_PALETTE_UNMEASURABLE` for legacy assets without a measured palette rather than treating absence as a 0% measured score.
-- [x] **Build 015:** asset dimensions and palette policy are checked during Knowledge Pack validation; non-zero clear-space policy is an explicit manual-review warning and is never represented as automatically certified.
-- [x] **Build 015:** submission form captures a controlled `intended_use` value; the value is stored on the submission and returned in review context.
-- [x] **Build 015:** review-time channel/use/validity restrictions are applied only where the submitted image SHA-256 exactly matches an approved asset record. A different flattened creative containing a logo is not automatically identified.
-- [x] **Build 015:** Brand Control Center includes a guided per-asset-kind usage policy editor, saving owner policy in the unpublished draft; publication remains required before the policy is authoritative.
-- [x] **Build 015:** migration `20261109_0005` adds the submission intended-use field and handles both fresh metadata-created SQLite databases and pre-existing Build 014 schemas.
-- [x] SHA-256 integrity validation for uploaded source originals and uploaded assets before serving/validation.
-- [x] Pack, source, owner-decision, asset-scan/upload and publication actions are audited.
-- [x] Cross-brand API isolation tests prove a draft from one brand cannot be read from another brand in the same tenant.
+The Phase 04 exit gate is that a reviewer can trace a finding to the exact approved record, version, owner, validity and source; draft or unapproved knowledge never enters authoritative retrieval. Build 016 supplies the owner lifecycle, provenance and regression evidence for this gate.
 
-## Acceptance evidence in Build 015
+## Requirement status
 
-- `tests/integration/test_brand_management.py`: draft/validate/publish lifecycle; cross-brand isolation; source registry and asset approval; DB-backed reload/stale-draft protection; Build 012 migration; version diff endpoint; PDF/DOCX source upload through scanner outage → clean retry → extraction → download → owner approval; infected source quarantine.
-- `tests/unit/test_malware_scanner.py`: INSTREAM framing, CLEAN result, INFECTED result, transport outage and invalid/empty payload handling.
-- `tests/unit/test_knowledge_pack_store.py`: uploaded-source extraction provenance cannot be changed through generic JSON; immutable-version diff; private storage key redaction; reference excerpt bounds; minimum dimensions; measured palette rejection; missing palette is explicitly unmeasurable; policy schema validation.
-- `tests/unit/test_asset_policy.py`: palette extraction and weighted matching; allowed channel/use and temporal rules; exact-hash review-time restrictions; clear-space manual-review result; non-identical image hashes are not treated as approved asset matches.
-- `tests/integration/test_api.py` and `tests/integration/test_brand_management.py`: intended-use API persistence/rejection and owner asset-policy draft → validate → publish workflow.
-- Full backend suite: **119 passed, 1 skipped, 0 failed (120 collected)** in the local SQLite test environment. The skipped test is the PostgreSQL-only RLS enforcement test.
-- Python `compileall`: passed for backend, apps, migrations, tests and scripts.
-- Alembic/database verifier: SQLite current at `20261109_0005`; all 16 required tables present; RLS is not applicable to SQLite.
-- Synthetic golden evaluation: **11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL** (12 deterministic synthetic cases; not a general accuracy claim).
-- TypeScript compiler API syntax parse: passed for the four changed files (`brand/page.tsx`, `submissions/new/page.tsx`, `reviews/[id]/page.tsx`, `lib/api.ts`). Full `npm ci`, lint, typecheck and production build were not completed: dependency installation timed out and project-local binaries were unavailable.
-- ClamAV protocol behaviour is unit-tested using a fake TCP socket; a live daemon/signature-update run was not performed.
+| Requirement | Status | Implementation / evidence |
+|---|---|---|
+| Tenant + brand-isolated Knowledge Packs | Complete | Separate catalogue/head/draft/version namespaces; new non-demo brands start empty; cross-brand access tested. |
+| Pack versions, active pointer and immutable snapshots | Complete | SQLAlchemy catalogue, immutable version snapshots, active head and append-only record decisions; database is canonical and JSON is a repairable mirror. |
+| Owner-controlled draft and publication lifecycle | Complete | Draft create/edit, validation, record decisions, publish, mandatory decision reasons, compare-and-swap and version-bound history. Only publication activates a pack. |
+| Facts | Complete | Guided creation form; required scope and validity metadata; approved source ID/version and exact quote; quote is checked against retained approved source text. |
+| Policy clauses | Complete | Guided creation form; exact approved source/version/quote required for new clauses. Server marks new clauses as provenance-required and rejects client attempts to disable the marker or approve without an exact excerpt. Legacy synthetic seed policies remain compatible. |
+| Terminology | Complete | Guided creation form, preferred/prohibited forms, locale, scoped exceptions and preferred-term linkage validation. |
+| Voice examples / guidance | Complete | Guided creation form for traits, examples and disallowed patterns; voice guidance remains advisory unless a deterministic brand rule explicitly governs wording. |
+| Approved assets | Complete | Private upload, SHA-256, fail-closed malware scan, dimensions, measured palette metadata and owner approval; policy restrictions are applied at review only for exact-hash catalogue matches. |
+| Source registry | Complete | Manual URI/excerpt registration and controlled PDF/DOCX private upload, scan, extraction, retry, preview/download gates, provenance and audit. Remote URIs are not fetched. |
+| Source replacement and history | Complete | Guarded v1→v2 replacement retains the old source until replacement is CLEAN and extracted; bounded compare endpoint; predecessor/successor and cycle checks. |
+| Safe source deletion | Complete | Only unapproved, unreferenced draft sources can be deleted. Referenced/published sources are protected. Deleting a removable latest version restores the prior source's status. |
+| Scope and validity conflict validation | Complete | Overlapping facts, policy clauses, terminology locale/scope and voice guidance are checked. Conflict is visible for owner resolution; the system does not silently select a winner. Distinct offer/product scope remains distinct. |
+| Brand Control Center usability | Complete | Guided record creation, advanced structured editor, section views, history/diffs and search/filters for product/offer, channel, locale, geography, audience, owner/approver and validity. |
+| Pack source/version comparison | Complete | Bounded diff view/API; private storage references are redacted. |
+| Temporal truth and evidence provenance | Complete for Knowledge Pack scope | Validity and recorded-version history retained; exact source/version/owner/status/scope are retained; draft and unapproved records excluded from authoritative retrieval. |
+| Database migration | Complete locally | Alembic head `20261109_0005`; local verifier sees all 16 required tables. |
+| PostgreSQL RLS and concurrent publication | Implemented; external run pending | CI creates a non-superuser `NOBYPASSRLS` app role; RLS test and competing-publication test run in that job. Both are skipped in local SQLite. |
+| Live ClamAV service operation | Implemented; external run pending | CI includes live daemon/signature test for clean-file acceptance and EICAR test-signature detection; local tests cover protocol framing, outage, infected and malformed cases. |
+| Frontend production quality | Source integration complete; external run pending | TSX syntax parsing passed for changed Knowledge Pack TSX files. CI runs npm ci, lint, typecheck and production build; those hosted results are not yet observed. |
 
-## Remaining work before Phase 04 sign-off
+## Build 016 implementation details
 
-- [ ] Run the PostgreSQL CI with a non-superuser `NOBYPASSRLS` application role; prove all four Knowledge Pack RLS policies and concurrent publication under a real PostgreSQL service.
-- [ ] Run a live ClamAV Compose integration check, including initial signature database update, scanner outage/recovery and infected test fixture; select a deployment-specific scanner availability/operations policy.
-- [ ] Extend review-time asset analysis beyond exact-byte matching to perceptual candidates with conservative thresholds and mandatory human confirmation; do not treat embeddings or perceptual similarity as logo certification.
-- [ ] Decide whether palette comparisons need a perceptual colour space (for example, CIE Lab/Delta E) after evaluation on approved brand fixtures; current RGB-distance check is explicitly a rough candidate gate.
-- [ ] Add fully guided create/edit forms for the complete fact, policy, terminology and voice record schemas. The asset usage policy editor is now guided, but the JSON editor remains an expert surface for other record classes.
-- [ ] Complete normalized schema and conflict validation across scoped facts, policies, terms, voice, assets and sources. The current equal-authority fact/policy and terminology checks are not a complete governance conflict engine.
-- [ ] Add source replacement/version lifecycle and compare source versions in a guided change-summary view where source owner expects it.
-- [ ] Add retention/deletion controls for quarantined source/asset objects and recovery/cleanup for failed DB registration after a private object has been written.
-- [ ] Run full frontend `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build`, then browser walkthrough/manual screenshots at supported laptop and tablet widths.
-- [ ] Re-run the full Phase 03 negative-access matrix on PostgreSQL; the frontend and database requirements in that phase are still unsigned.
+### Owner forms and record governance
 
-## Trust boundaries and limitations
+`apps/web/components/knowledge-record-forms.tsx` supplies guided creation forms for facts, policies, terminology and voice. `apps/web/app/brand/page.tsx` connects the forms to the active draft and owner workflow. The advanced JSON editor remains available for careful record edits; it is not the default create workflow. Server-side validation remains authoritative.
 
-- The database is authoritative for pack metadata, immutable version snapshots, drafts, record decisions and active pointer. JSON files are compatibility/export mirrors.
-- Original source and asset bytes remain in configured private storage. Browser responses expose authenticated download/preview content, not object storage keys.
-- Malware scanning is active only when a reachable ClamAV daemon with usable signatures is configured. Without it, uploads are quarantined and remain unavailable; no bypass is provided.
-- Build 014's malware scan covers Knowledge Pack PDF/DOCX source documents and raster brand assets. The normal content-submission upload pipeline remains Phase 05 work and is not claimed to be malware-scanned by Build 015.
-- Build 015 palette extraction and comparison is a compact RGB-distance estimate over a bounded thumbnail. It is not ICC-aware colour management, perceptual colour difference, semantic brand-fit analysis or logo identity recognition. A missing palette is unmeasurable and prevents passing a configured palette requirement.
-- Build 015 asset usage policy is applied to an uploaded image only on exact SHA-256 equality with an approved asset record. It does not discover logos or other catalogue marks embedded inside a different flattened creative. Clear-space remains manual review.
-- Extracted source text is a provenance aid. OCR/parse confidence and completeness remain visible; partial/empty extraction does not satisfy uploaded-source approval.
-- Live MinIO/AWS storage, ClamAV runtime, PostgreSQL RLS and row-lock semantics were not exercised in this environment.
-- Version diff output is bounded and redacts private storage references. It does not replace signed independent audit checkpoints.
-- Source URI records are not fetched and do not independently substantiate a claim. Remote URL retrieval would require a separate SSRF-safe, allowlisted import design.
-- Approval remains human-controlled and version-bound. An approved record in a draft is not used by reviews until validation and publication.
-- Knowledge-change impact identification and affected-review re-check remain Phase 14 advanced work; historical approvals are not rewritten.
+New factual records and new policy clauses require exact excerpts from an approved source record/version. For uploaded PDF/DOCX sources, the source must have a CLEAN scanner result and completed non-empty extraction. Generic JSON editing cannot forge the source-provenance-required marker or bypass the quote check. Editing previously approved material moves it back to draft for a fresh owner decision.
 
-## Decision
+### Conflict validation
 
-**Phase 04 remains open.** Build 015 closes the first implementation of owner-configurable asset usage restrictions and submission intended-use context. It does not close all-record guided forms, broader conflict governance, source replacement/retention lifecycle, live PostgreSQL RLS/concurrency, live ClamAV operation or browser evidence. Those remain acceptance requirements before sign-off.
+The Knowledge Pack validator checks overlapping scope and validity across facts, policies, locale-aware terminology and voice guidance. Wildcard scope is treated as overlapping where appropriate; distinct product/offer scopes are not merged. Conflicts are returned as explicit validation findings. No ranking or model response silently determines brand truth; the Brand Owner resolves the conflict in a new draft and publishes a new immutable version.
+
+### Source replacement and deletion
+
+The source replacement endpoint does not supersede the existing source when the scanner is unavailable, the new binary is infected, parsing fails or extraction is incomplete. On successful scan and extraction, the new source becomes the current candidate and the previous version remains in history. The compare endpoint returns bounded text/metadata differences without object-storage keys. Deletion is blocked for approved, referenced or historically published source objects. A removable latest draft version can be deleted and its predecessor status restored.
+
+### Search and filters
+
+The Brand Control Center includes a filter panel across records and source/asset sections. Filters include free-text search, product/offer, channel, locale, geography, audience, owner/approver and validity window (`current`, `expired`, `future`, `unspecified`, `all`). Filters improve owner navigation; they do not replace API authorization or server-side scope filtering during retrieval.
+
+## Local verification performed for Build 016
+
+- Full local backend/unit/integration suite: **132 passed, 2 skipped, 0 failed (134 collected)**.
+- The two skips are explicit PostgreSQL-only checks: row-level security enforcement and concurrent publication. The concurrent-publication test asserts exactly one winner and one rejected contender; it is not represented as locally executed.
+- Python compilation: `python -m compileall -q backend apps migrations tests scripts` passed.
+- Alembic/database verifier: local SQLite current at `20261109_0005`; all 16 required tables present. SQLite has no PostgreSQL RLS/pgvector semantics, so those are not inferred.
+- Golden evaluation: **11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL** across 12 deterministic synthetic cases. The manual case is visual asset identity/contrast; this is not a general accuracy claim.
+- TypeScript compiler API syntax parsing: passed for `apps/web/app/brand/page.tsx` and `apps/web/components/knowledge-record-forms.tsx`.
+- `.github/workflows/ci.yml` parsed successfully and defines `backend`, `backend-postgres`, `clamav-live` and `frontend` jobs.
+- `npm run lint` could not start locally because the project-local ESLint executable is absent (`eslint: not found`). Full frontend `npm ci`, lint, typecheck and production build are therefore **not verified in this environment**. The CI job is configured but is not a substitute for an observed passing run.
+- Docker and `psql` are not installed in this authoring environment; live PostgreSQL and live ClamAV were not run here.
+
+## Remaining operational checks (not unimplemented Phase 04 features)
+
+1. Run the `backend-postgres` CI job and retain the run URL/result. It must prove the RLS negative-access matrix with the configured non-superuser role, and the concurrent publish test must confirm one immutable publication only.
+2. Run the `clamav-live` job and retain its run URL/result. Confirm daemon startup/signature readiness, CLEAN test file and EICAR signature detection.
+3. Run the `frontend` job and retain the run URL/result for `npm ci`, lint, typecheck and production build. Follow with a browser walkthrough at supported laptop/tablet widths and retain screenshots.
+4. Record job IDs and any remediation below before describing the cumulative release as operationally verified.
+
+| External check | Run / evidence | Result |
+|---|---|---|
+| PostgreSQL RLS + concurrent publication | Not run in this authoring session | Pending |
+| Live ClamAV | Not run in this authoring session | Pending |
+| Frontend lint/typecheck/build | Local ESLint unavailable; CI not yet observed | Pending |
+| Browser walkthrough / screenshots | Not run in this authoring session | Pending |
+
+## Trust boundaries and deliberate limitations
+
+- PostgreSQL RLS and true row-lock/concurrent-publication semantics remain dependent on a passing PostgreSQL CI run. SQLite results do not establish them.
+- ClamAV scanning is fail-closed. If the daemon or signatures are unavailable, the upload remains unavailable; there is no “skip scan” approval path.
+- Remote source URIs are stored as provenance metadata but are not fetched. Any future URL ingestion requires an allowlisted SSRF-safe fetch adapter.
+- Exact policy excerpt matching proves that the quote appears in the retained approved source text; it is not an independent legal interpretation of the policy.
+- Raster palette policy is a bounded RGB-distance estimate, not ICC-aware or perceptual colour measurement. Clear-space requires human inspection.
+- Asset use restrictions require exact SHA-256 equality with the approved asset. A logo embedded in a different flattened creative is not automatically recognised; perceptual matching is a candidate signal for later specialist-analysis work, not certification.
+- Automatic Impact Radar and re-review triggered by future Knowledge Pack changes are Phase 14 advanced work. Historic approval receipts are not rewritten.
+- Automated TTL retention purge and storage-orphan reconciliation remain operational hardening; safe source deletion and reference protection are implemented for the owner-managed draft lifecycle.
+
+## Gate decision
+
+**Phase 04 implementation is closed in Build 016.** The owner-controlled Knowledge Pack lifecycle, source traceability, record validation, scoped conflict handling, source replacement/deletion and version history are implemented and covered by local regression tests. The external checks above remain open release-assurance items; do not state that PostgreSQL RLS, live malware scanning or full frontend build have passed until their CI results are observed and recorded here.

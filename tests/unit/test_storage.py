@@ -144,3 +144,12 @@ def test_s3_adapter_maps_provider_failure_to_storage_unavailable():
     storage = S3CompatibleStorage("sigillum-test", client=BrokenClient())
     with pytest.raises(StorageUnavailable):
         storage.put_bytes("tenant/file.txt", b"data")
+
+
+def test_local_storage_delete_is_idempotent(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "objects")
+    storage.put_bytes("tenant/brand/file.bin", b"private")
+    assert storage.exists("tenant/brand/file.bin") is True
+    storage.delete_bytes("tenant/brand/file.bin")
+    storage.delete_bytes("tenant/brand/file.bin")
+    assert storage.exists("tenant/brand/file.bin") is False

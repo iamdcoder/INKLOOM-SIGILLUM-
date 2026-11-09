@@ -15,15 +15,21 @@ Base path: `/api/v1`
 | GET | `/brands/current` | Current active tenant Brand Knowledge Pack metadata and fingerprint |
 | GET | `/brands/current/management` | Read-only active pack snapshot and published version history (Brand Owner, Reviewer, Administrator) |
 | GET | `/brands/current/versions` | Published Knowledge Pack versions |
+| GET | `/brands/current/versions/compare?from_version_id=...&to_version_id=...` | Compare two immutable published versions in the selected brand; returns bounded record/field changes with private storage references redacted |
 | POST | `/brands/current/drafts` | Create a Brand Owner draft from the current active version |
 | GET | `/brands/current/drafts/{draft_id}` | Read a Brand Owner's draft |
 | PUT | `/brands/current/drafts/{draft_id}/section` | Replace one typed JSON section in a draft |
 | POST | `/brands/current/drafts/{draft_id}/validate` | Validate draft structure and record identifiers |
 | POST | `/brands/current/drafts/{draft_id}/publish` | Publish a new immutable pack version (Brand Owner only) |
 | POST | `/brands/current/drafts/{draft_id}/sources` | Register source provenance in the draft; URL metadata is not fetched |
+| POST | `/brands/current/drafts/{draft_id}/sources/upload` | Brand Owner-only PDF/DOCX source upload into private quarantine; scan and extraction run only after signature/size validation |
+| POST | `/brands/current/drafts/{draft_id}/sources/{source_id}/scan` | Brand Owner-only malware scan retry for a quarantined source document |
+| GET | `/brands/current/drafts/{draft_id}/sources/{source_id}/download` | Retrieve a source original only after CLEAN scan and SHA-256 verification |
+| GET | `/brands/current/drafts/{draft_id}/sources/{source_id}/extraction` | Inspect bounded extraction manifest only after CLEAN scan |
 | POST | `/brands/current/drafts/{draft_id}/records/{record_type}/{record_id}/decision` | Brand Owner approve/reject/draft/not_approved a fact, policy, term, source or asset |
 | POST | `/brands/current/drafts/{draft_id}/assets` | Upload a bounded PNG/JPEG/WebP asset into private object storage as a draft |
-| GET | `/brands/current/drafts/{draft_id}/assets/{asset_id}` | Preview an uploaded draft asset with hash verification (Brand Owner only) |
+| GET | `/brands/current/drafts/{draft_id}/assets/{asset_id}` | Preview an uploaded draft asset after CLEAN malware scan and hash verification (Brand Owner only) |
+| POST | `/brands/current/drafts/{draft_id}/assets/{asset_id}/scan` | Brand Owner-only scan retry for an uploaded draft asset |
 | GET | `/brands/current/assets/{asset_id}` | Retrieve an approved published asset in the selected brand, with hash verification |
 | GET | `/dashboard/summary` | Workspace/creator summary |
 | GET | `/submissions` | List visible submissions |
@@ -55,10 +61,16 @@ Errors use stable detail codes where defined, including `INVALID_UPLOAD`, `UPLOA
 - The file grant is a signed bearer link, expiring after `FILE_GRANT_MINUTES` (default 5; maximum 15). It is tied to the issuing session and membership; logout, session expiry, or membership deactivation invalidates it.
 
 
-### Brand Knowledge Pack semantics (Build 012)
+### Brand Knowledge Pack semantics (Builds 013–014)
 
 - Knowledge Pack directories and drafts are scoped by both tenant ID and selected brand ID. New non-demo brands begin with empty facts, policies, terms, assets and sources; the legacy tenant-only demo pack is migrated only into the original ORBITA brand namespace.
 - Source registration preserves source ID/type/version, owner, approval state, validity and reference excerpt/URI metadata. Remote URLs are never fetched automatically. A source marked approved in a draft is not authoritative until the whole pack is validated and published.
 - Record decisions support fact, policy, terminology, source and uploaded asset records. Decision reasons are retained in the draft and publication audit.
-- Uploaded assets are PNG/JPEG/WebP only. SVG is rejected by the new upload route. Approved uploaded assets are re-hashed during draft validation and again when served. This is not malware scanning or automated visual identity certification.
-- The pack metadata store remains filesystem-backed and single-host. Multi-process/distributed publication locking and PostgreSQL-backed pack metadata remain future work.
+- Build 014 accepts PDF/DOCX Knowledge Pack source documents via the Brand Owner-only `sources/upload` route. The original is stored privately under a tenant+brand+draft namespace and is hashed. ClamAV TCP `INSTREAM` scanning is fail-closed: only `CLEAN` allows extraction; `INFECTED`, `UNAVAILABLE`, `ERROR` and pending states remain quarantined. Source download, extraction inspection and approval require CLEAN scan; uploaded source approval also requires completed non-empty extraction. A Brand Owner can retry scanning after recovery. The ordinary submission upload path is not included in this scanning claim.
+- Uploaded PNG/JPEG/WebP brand assets are also scanned in Build 014. SVG remains unsupported by the upload route. Asset preview and approval require CLEAN status; downloaded/served bytes are hash-verified. This is not automated visual identity certification.
+- Build 014 exposes a bounded source extraction manifest (up to 20,000 text characters and 500 logical regions) after CLEAN scan. It retains original hash, parser status/confidence and warnings; it does not make the extracted source authoritative by itself.
+- Generic JSON section editing cannot inject approval provenance, storage keys, upload identity, malware results or extracted content. Editing an already-approved record downgrades it to draft; explicit owner decision and pack publication are required again.
+- `GET /brands/current/versions/compare` compares two scoped immutable published pack versions and returns bounded record/field changes; private object-store keys are redacted.
+- Build 013 stores active pack heads, immutable JSON version snapshots, drafts and per-record decisions in transactional database tables. The active-version update uses a row lock plus revision compare-and-swap; draft writes also compare revisions. Build 012 filesystem packs/drafts are imported during first scoped access, and the local JSON pointer remains a repairable compatibility mirror. Private asset/source bytes remain in the configured storage adapter.
+- `GET /brands/current/drafts/{draft_id}/decisions` returns scoped, append-only record decision history to Brand Owners, Reviewers and Administrators.
+- Migration `20261109_0004` installs tenant+brand RLS on the four Knowledge Pack catalogue tables in PostgreSQL. SQLite catalogue tests pass; live non-superuser PostgreSQL RLS/concurrency and live ClamAV daemon/signature-update verification are still required.

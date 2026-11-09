@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 from io import BytesIO
 from hashlib import sha256
 from uuid import uuid4
@@ -10,20 +11,100 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from sigillum.config import get_settings
 from sigillum.api.dependencies import CurrentActor, CurrentUser, DbSession, WorkspaceContext, _workspace_rows, require_roles
-from sigillum.infrastructure.database.session import get_db, set_database_scope
+from sigillum.infrastructure.database.session import SessionLocal, get_db, set_database_scope
 from sigillum.api.schemas import (LoginRequest, TokenResponse, DecisionRequest, PatchRequest, RevisionRequest, KnowledgePackSectionUpdate, WorkspaceSwitchRequest, MembershipCreateRequest, MembershipUpdateRequest, FileGrantResponse, KnowledgeSourceCreateRequest, KnowledgeRecordDecisionRequest)
 from sigillum.domain.enums import Role
 from sigillum.infrastructure.database import models
 from sigillum.infrastructure.storage import StorageUnavailable, get_storage
 from sigillum.infrastructure.security import verify_password, create_access_token, create_file_grant_token, decode_access_token
-from sigillum.modules.content.extraction import sniff_file
+from sigillum.infrastructure.malware import scan_bytes
+from sigillum.modules.content.extraction import extract, sniff_file
 from sigillum.modules.knowledge.brand_pack import BrandPack
+from sigillum.modules.knowledge.asset_policy import extract_palette
 from sigillum.modules.knowledge.store import KnowledgePackStore
 from sigillum.application.services.review_service import ReviewService, audit
 
 router=APIRouter()
 settings=get_settings()
-pack_store=KnowledgePackStore(settings.brand_pack_path, settings.storage_root.parent / "brand_packs")
+pack_store=KnowledgePackStore(settings.brand_pack_path, settings.storage_root.parent / "brand_packs", SessionLocal)
+
+def scan_upload_bytes(data: bytes) -> dict[str, str | None]:
+    """Scanner seam used by uploads; tests inject deterministic clean/infected results."""
+    return scan_bytes(data, settings)
+
+def _scan_document_and_extract(source: dict, raw: bytes, storage) -> dict:
+    scan_result = scan_upload_bytes(raw)
+    status = str(scan_result.get("status", "ERROR")).upper()
+    if status not in {"CLEAN", "INFECTED", "UNAVAILABLE", "ERROR"}:
+        status = "ERROR"
+    updates: dict[str, object] = {
+        "scan_status": status,
+        "scan_engine": scan_result.get("engine") or "clamav",
+        "scan_scanned_at": scan_result.get("scanned_at") or datetime.now(timezone.utc).isoformat(),
+        "scan_signature": scan_result.get("signature"),
+        "extraction_status": "PENDING_SCAN" if status in {"UNAVAILABLE", "ERROR"} else "NOT_RUN",
+        "extraction_warnings": [],
+        "region_count": 0,
+    }
+    if status == "INFECTED":
+        updates["extraction_warnings"] = ["MALWARE_DETECTED: the source is quarantined and was not parsed."]
+    elif status in {"UNAVAILABLE", "ERROR"}:
+        updates["extraction_warnings"] = ["MALWARE_SCAN_PENDING: the source remains quarantined until a clean scanner result is available."]
+    else:
+        try:
+            result = extract(source["original_filename"], raw)
+            full_text = result.text or ""
+            excerpt = full_text[:20000].strip()
+            warnings_list = list(result.warnings)
+            extraction_status = result.status
+            if len(full_text) > 20000:
+                warnings_list.append("SOURCE_EXCERPT_TRUNCATED: only the first 20,000 characters are retained for exact evidence matching.")
+                extraction_status = "PARTIAL"
+            if not excerpt:
+                extraction_status = "PARTIAL"
+                warnings_list.append("SOURCE_TEXT_EMPTY: the file contains no extractable text; manual review is required.")
+            regions = []
+            for region in result.regions[:500]:
+                if not isinstance(region, dict):
+                    continue
+                safe_region = dict(region)
+                if isinstance(safe_region.get("text"), str) and len(safe_region["text"]) > 4000:
+                    safe_region["text"] = safe_region["text"][:3997] + "..."
+                safe_region.pop("words", None)
+                regions.append(safe_region)
+            if len(result.regions) > 500:
+                warnings_list.append("SOURCE_REGION_LIMIT: only the first 500 logical regions are exposed in the extraction manifest.")
+            manifest = {
+                "schema_version": "1.0.0",
+                "source_id": source["source_id"],
+                "file_sha256": source["file_sha256"],
+                "parser_status": result.status,
+                "confidence": result.confidence,
+                "text_characters": len(full_text),
+                "regions_total": len(result.regions),
+                "regions_returned": len(regions),
+                "warnings": warnings_list,
+                "regions": regions,
+            }
+            manifest_bytes = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            storage.put_bytes(source["extraction_key"], manifest_bytes, "application/json")
+            updates.update({
+                "extraction_status": extraction_status,
+                "extraction_warnings": warnings_list,
+                "region_count": len(result.regions),
+                "reference_text": excerpt or None,
+                "sha256": sha256(excerpt.encode("utf-8")).hexdigest() if excerpt else None,
+            })
+        except Exception as exc:
+            updates.update({
+                "extraction_status": "FAILED",
+                "extraction_warnings": [f"SOURCE_PARSE_FAILED: {type(exc).__name__}; manual review is required."],
+                "region_count": 0,
+                "reference_text": None,
+                "sha256": None,
+            })
+    source.update(updates)
+    return source
 
 def _active_pack(user: CurrentActor) -> BrandPack:
     try:
@@ -341,6 +422,21 @@ def brand_versions(user=Depends(require_roles(Role.BRAND_OWNER, Role.REVIEWER, R
     return {"versions": pack_store.list_versions(user.tenant_id, user.brand_id, user.brand_name)}
 
 
+@router.get("/brands/current/versions/compare")
+def compare_brand_knowledge_versions(
+    from_version_id: str, to_version_id: str,
+    user=Depends(require_roles(Role.BRAND_OWNER, Role.REVIEWER, Role.ADMINISTRATOR)),
+):
+    try:
+        return pack_store.compare_versions(
+            user.tenant_id, user.brand_id, from_version_id, to_version_id, user.brand_name
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "KNOWLEDGE_PACK_VERSION_NOT_FOUND", "message": "One or both requested Knowledge Pack versions were not found in the selected brand."})
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "INVALID_VERSION_COMPARISON", "message": str(exc)}) from exc
+
+
 @router.post("/brands/current/drafts")
 def create_brand_draft(user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db)):
     draft = pack_store.create_draft(user.tenant_id, user.id, user.brand_id, user.brand_name)
@@ -358,6 +454,17 @@ def get_brand_draft(draft_id: str, user=Depends(require_roles(Role.BRAND_OWNER))
     return draft
 
 
+@router.get("/brands/current/drafts/{draft_id}/decisions")
+def list_brand_draft_decisions(
+    draft_id: str,
+    user=Depends(require_roles(Role.BRAND_OWNER, Role.REVIEWER, Role.ADMINISTRATOR)),
+):
+    try:
+        return {"decisions": pack_store.list_decisions(user.tenant_id, draft_id, user.brand_id)}
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+
+
 @router.put("/brands/current/drafts/{draft_id}/section")
 def update_brand_draft_section(draft_id: str, payload: KnowledgePackSectionUpdate, user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db)):
     try:
@@ -365,6 +472,8 @@ def update_brand_draft_section(draft_id: str, payload: KnowledgePackSectionUpdat
     except FileNotFoundError:
         raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
     except ValueError as exc:
+        if "changed in another session" in str(exc):
+            raise HTTPException(409, detail={"code": "STALE_DRAFT_REVISION", "message": str(exc)}) from exc
         raise HTTPException(422, detail={"code": "INVALID_DRAFT_UPDATE", "message": str(exc)}) from exc
     audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_DRAFT_SECTION_UPDATED", "brand_knowledge_draft", draft_id, {"section": payload.section}, brand_id=user.brand_id)
     db.commit()
@@ -382,6 +491,10 @@ def validate_brand_draft(draft_id: str, user=Depends(require_roles(Role.BRAND_OW
         )
     except FileNotFoundError:
         raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    except ValueError as exc:
+        if "changed in another session" in str(exc):
+            raise HTTPException(409, detail={"code": "STALE_DRAFT_REVISION", "message": str(exc)}) from exc
+        raise HTTPException(422, detail={"code": "INVALID_DRAFT", "message": str(exc)}) from exc
     audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_DRAFT_VALIDATED", "brand_knowledge_draft", draft_id, {"valid": result["valid"], "error_count": len(result["errors"])}, brand_id=user.brand_id)
     db.commit()
     return result
@@ -435,9 +548,7 @@ def add_brand_source(
     }
     try:
         draft = pack_store.get_draft(user.tenant_id, draft_id, user.brand_id)
-        registry = draft["snapshot"].setdefault("sources", {"schema_version": "1.0.0", "sources": []})
-        registry.setdefault("sources", []).append(source)
-        pack_store.update_section(user.tenant_id, draft_id, "sources", registry, user.id, user.brand_id)
+        pack_store.append_source(user.tenant_id, user.brand_id, draft_id, source, user.id)
     except FileNotFoundError:
         raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
     except ValueError as exc:
@@ -446,6 +557,169 @@ def add_brand_source(
           {"source_type": source["source_type"], "status": source["status"]}, brand_id=user.brand_id)
     db.commit()
     return {"source": source, "draft_status": draft["status"]}
+
+
+@router.post("/brands/current/drafts/{draft_id}/sources/upload")
+async def upload_brand_source_document(
+    draft_id: str,
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    source_type: str = Form(default="policy_document"),
+    version: int = Form(default=1),
+    valid_from: str | None = Form(default=None),
+    valid_until: str | None = Form(default=None),
+    user=Depends(require_roles(Role.BRAND_OWNER)),
+    db: Session = Depends(get_db),
+):
+    """Store a private PDF/DOCX source in quarantine, scan it, then extract provenance."""
+    source_name = (name or "").strip()
+    allowed_types = {"reference_text", "policy_document", "product_specification", "campaign_terms", "guideline", "other"}
+    if not source_name or len(source_name) > 240:
+        raise HTTPException(422, detail={"code": "SOURCE_NAME_INVALID", "message": "Source name must contain 1 to 240 characters."})
+    if source_type not in allowed_types:
+        raise HTTPException(422, detail={"code": "SOURCE_TYPE_UNSUPPORTED", "message": "Unsupported uploaded source type."})
+    if version < 1 or version > 100000:
+        raise HTTPException(422, detail={"code": "SOURCE_VERSION_INVALID", "message": "Source version must be a positive integer."})
+    original_filename = Path(file.filename or "source-document").name[:240]
+    extension = Path(original_filename).suffix.lower()
+    if extension not in {".pdf", ".docx"}:
+        await file.close()
+        raise HTTPException(415, detail={"code": "SOURCE_DOCUMENT_TYPE_UNSUPPORTED", "message": "Knowledge source uploads currently accept PDF and DOCX only."})
+    raw = await file.read(settings.max_upload_bytes + 1)
+    await file.close()
+    if not raw:
+        raise HTTPException(422, detail={"code": "EMPTY_SOURCE_DOCUMENT", "message": "The uploaded source document is empty."})
+    if len(raw) > settings.max_upload_bytes:
+        raise HTTPException(413, detail={"code": "SOURCE_DOCUMENT_TOO_LARGE", "message": "The uploaded source document exceeds the configured size limit."})
+    try:
+        mime_type = sniff_file(original_filename, raw)
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "INVALID_SOURCE_DOCUMENT", "message": str(exc)}) from exc
+    if mime_type not in {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}:
+        raise HTTPException(415, detail={"code": "SOURCE_DOCUMENT_TYPE_UNSUPPORTED", "message": "Knowledge source uploads currently accept PDF and DOCX only."})
+    try:
+        draft = pack_store.get_draft(user.tenant_id, draft_id, user.brand_id)
+        if draft.get("status") == "PUBLISHED":
+            raise HTTPException(409, detail={"code": "DRAFT_IMMUTABLE", "message": "Published Knowledge Pack drafts cannot accept new sources."})
+        source_id = f"SRC-{uuid4().hex[:16].upper()}"
+        file_digest = sha256(raw).hexdigest()
+        safe_extension = "pdf" if mime_type == "application/pdf" else "docx"
+        storage_key = f"brand-source-documents/{user.tenant_id}/{user.brand_id}/{draft_id}/{source_id}/original.{safe_extension}"
+        extraction_key = f"brand-source-extractions/{user.tenant_id}/{user.brand_id}/{draft_id}/{source_id}/extraction.json"
+        source = {
+            "source_id": source_id, "name": source_name, "source_type": source_type, "version": version,
+            "source_format": safe_extension, "original_filename": original_filename, "mime_type": mime_type,
+            "size_bytes": len(raw), "file_sha256": file_digest, "storage_key": storage_key,
+            "extraction_key": extraction_key, "reference_text": None, "sha256": None,
+            "owner_id": user.id, "uploaded_by": user.id, "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "status": "draft", "scan_status": "PENDING", "scan_engine": "clamav",
+            "scan_scanned_at": None, "scan_signature": None, "extraction_status": "PENDING_SCAN",
+            "extraction_warnings": [], "region_count": 0, "valid_from": valid_from, "valid_until": valid_until,
+            "created_by": user.id, "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        storage = get_storage(settings)
+        storage.put_bytes(storage_key, raw, mime_type)
+        _scan_document_and_extract(source, raw, storage)
+        pack_store.append_source(user.tenant_id, user.brand_id, draft_id, source, user.id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    except StorageUnavailable as exc:
+        raise HTTPException(503, detail={"code": "STORAGE_UNAVAILABLE", "message": "Private source storage is unavailable; the document was not registered."}) from exc
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "INVALID_SOURCE_DOCUMENT", "message": str(exc)}) from exc
+    audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_SOURCE_DOCUMENT_UPLOADED", "brand_knowledge_source", source_id,
+          {"source_format": safe_extension, "scan_status": source["scan_status"], "extraction_status": source["extraction_status"], "file_sha256": file_digest}, brand_id=user.brand_id)
+    db.commit()
+    return {"source": source, "draft_id": draft_id, "draft_status": "DRAFT", "authoritative": False}
+
+
+@router.post("/brands/current/drafts/{draft_id}/sources/{source_id}/scan")
+def rescan_brand_source_document(
+    draft_id: str, source_id: str, user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db),
+):
+    try:
+        draft = pack_store.get_draft(user.tenant_id, draft_id, user.brand_id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    sources = (draft.get("snapshot", {}).get("sources", {}) or {}).get("sources", [])
+    source = next((item for item in sources if isinstance(item, dict) and item.get("source_id") == source_id), None)
+    if not source or not source.get("storage_key"):
+        raise HTTPException(404, detail={"code": "SOURCE_NOT_FOUND", "message": "Uploaded source document not found."})
+    expected_prefix = f"brand-source-documents/{user.tenant_id}/{user.brand_id}/{draft_id}/"
+    if not str(source["storage_key"]).startswith(expected_prefix):
+        raise HTTPException(404, detail={"code": "SOURCE_NOT_FOUND", "message": "Uploaded source document not found."})
+    try:
+        storage = get_storage(settings)
+        raw = storage.get_bytes(source["storage_key"])
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "SOURCE_OBJECT_MISSING", "message": "The quarantined source file is missing."})
+    except StorageUnavailable as exc:
+        raise HTTPException(503, detail={"code": "STORAGE_UNAVAILABLE", "message": "Private source storage is unavailable."}) from exc
+    if sha256(raw).hexdigest().lower() != str(source.get("file_sha256", "")).lower():
+        raise HTTPException(409, detail={"code": "SOURCE_FILE_HASH_MISMATCH", "message": "The quarantined source bytes do not match their recorded SHA-256."})
+    updated = dict(source)
+    _scan_document_and_extract(updated, raw, storage)
+    try:
+        pack_store.update_scan_record(user.tenant_id, user.brand_id, draft_id, "source", source_id,
+            {key: updated.get(key) for key in ("scan_status", "scan_engine", "scan_scanned_at", "scan_signature", "extraction_key", "extraction_status", "extraction_warnings", "region_count", "reference_text", "sha256")}, user.id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "SOURCE_NOT_FOUND", "message": "Uploaded source document not found."})
+    except ValueError as exc:
+        raise HTTPException(409, detail={"code": "SOURCE_SCAN_UPDATE_REJECTED", "message": str(exc)}) from exc
+    audit(db, user.tenant_id, user.id, "BRAND_KNOWLEDGE_SOURCE_RESCANNED", "brand_knowledge_source", source_id,
+          {"scan_status": updated["scan_status"], "extraction_status": updated["extraction_status"]}, brand_id=user.brand_id)
+    db.commit()
+    return {"source_id": source_id, "scan_status": updated["scan_status"], "extraction_status": updated["extraction_status"], "extraction_warnings": updated["extraction_warnings"]}
+
+
+@router.get("/brands/current/drafts/{draft_id}/sources/{source_id}/download")
+def download_brand_source_document(draft_id: str, source_id: str, user=Depends(require_roles(Role.BRAND_OWNER, Role.REVIEWER, Role.ADMINISTRATOR))):
+    try:
+        draft = pack_store.get_draft(user.tenant_id, draft_id, user.brand_id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    sources = (draft.get("snapshot", {}).get("sources", {}) or {}).get("sources", [])
+    source = next((item for item in sources if isinstance(item, dict) and item.get("source_id") == source_id), None)
+    if not source or source.get("scan_status") != "CLEAN" or not source.get("storage_key"):
+        raise HTTPException(423, detail={"code": "SOURCE_QUARANTINED", "message": "The source is not available for download until malware scanning succeeds."})
+    expected_prefix = f"brand-source-documents/{user.tenant_id}/{user.brand_id}/{draft_id}/"
+    if not str(source["storage_key"]).startswith(expected_prefix):
+        raise HTTPException(404, detail={"code": "SOURCE_NOT_FOUND", "message": "Uploaded source document not found."})
+    try:
+        content = get_storage(settings).get_bytes(source["storage_key"])
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "SOURCE_OBJECT_MISSING", "message": "The source object is missing from private storage."})
+    except StorageUnavailable as exc:
+        raise HTTPException(503, detail={"code": "STORAGE_UNAVAILABLE", "message": "Private source storage is unavailable."}) from exc
+    if sha256(content).hexdigest().lower() != str(source.get("file_sha256", "")).lower():
+        raise HTTPException(409, detail={"code": "SOURCE_FILE_HASH_MISMATCH", "message": "The source bytes do not match the recorded SHA-256."})
+    filename = Path(str(source.get("original_filename") or f"{source_id}.bin")).name.replace("\"", "")
+    return Response(content=content, media_type=source.get("mime_type", "application/octet-stream"),
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}", "Cache-Control": "no-store"})
+
+
+@router.get("/brands/current/drafts/{draft_id}/sources/{source_id}/extraction")
+def get_brand_source_extraction(draft_id: str, source_id: str, user=Depends(require_roles(Role.BRAND_OWNER, Role.REVIEWER, Role.ADMINISTRATOR))):
+    try:
+        draft = pack_store.get_draft(user.tenant_id, draft_id, user.brand_id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    sources = (draft.get("snapshot", {}).get("sources", {}) or {}).get("sources", [])
+    source = next((item for item in sources if isinstance(item, dict) and item.get("source_id") == source_id), None)
+    if not source or source.get("scan_status") != "CLEAN" or not source.get("extraction_key"):
+        raise HTTPException(423, detail={"code": "SOURCE_QUARANTINED", "message": "Extraction details are unavailable until malware scanning succeeds."})
+    expected_prefix = f"brand-source-extractions/{user.tenant_id}/{user.brand_id}/{draft_id}/"
+    if not str(source["extraction_key"]).startswith(expected_prefix):
+        raise HTTPException(404, detail={"code": "SOURCE_EXTRACTION_NOT_FOUND", "message": "Extraction details not found."})
+    try:
+        payload = get_storage(settings).get_bytes(source["extraction_key"])
+        return json.loads(payload.decode("utf-8"))
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "SOURCE_EXTRACTION_NOT_FOUND", "message": "Extraction details not found."})
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(409, detail={"code": "SOURCE_EXTRACTION_INVALID", "message": "Stored extraction details are invalid."})
+    except StorageUnavailable as exc:
+        raise HTTPException(503, detail={"code": "STORAGE_UNAVAILABLE", "message": "Private source storage is unavailable."}) from exc
 
 
 @router.post("/brands/current/drafts/{draft_id}/records/{record_type}/{record_id}/decision")
@@ -506,6 +780,11 @@ async def upload_brand_asset(
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError, ValueError) as exc:
         raise HTTPException(422, detail={"code": "INVALID_BRAND_ASSET", "message": str(exc) or "The uploaded file is not a valid supported image."}) from exc
 
+    scan_result = scan_upload_bytes(raw)
+    scan_status = str(scan_result.get("status", "ERROR")).upper()
+    if scan_status not in {"CLEAN", "INFECTED", "UNAVAILABLE", "ERROR"}:
+        scan_status = "ERROR"
+
     asset_id = f"ASSET-{uuid4().hex[:16].upper()}"
     extension = {"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}[image_format]
     mime_type = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}[image_format]
@@ -520,8 +799,13 @@ async def upload_brand_asset(
         "width": width,
         "height": height,
         "sha256": digest,
+        "palette": extract_palette(raw),
         "storage_key": storage_key,
         "status": "draft",
+        "scan_status": scan_status,
+        "scan_engine": scan_result.get("engine") or "clamav",
+        "scan_scanned_at": scan_result.get("scanned_at"),
+        "scan_signature": scan_result.get("signature"),
         "owner_id": user.id,
         "uploaded_by": user.id,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
@@ -560,6 +844,8 @@ def preview_draft_brand_asset(
     asset = next((item for item in assets if isinstance(item, dict) and item.get("asset_id") == asset_id), None)
     if not asset or not asset.get("storage_key"):
         raise HTTPException(404, detail={"code": "ASSET_NOT_FOUND", "message": "Draft asset not found."})
+    if asset.get("scan_status") != "CLEAN":
+        raise HTTPException(423, detail={"code": "ASSET_QUARANTINED", "message": "The asset remains private until malware scanning succeeds."})
     expected_prefix = f"brand-assets/{user.tenant_id}/{user.brand_id}/"
     if not str(asset["storage_key"]).startswith(expected_prefix):
         raise HTTPException(404, detail={"code": "ASSET_NOT_FOUND", "message": "Draft asset not found."})
@@ -576,6 +862,47 @@ def preview_draft_brand_asset(
                     headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
+@router.post("/brands/current/drafts/{draft_id}/assets/{asset_id}/scan")
+def rescan_draft_brand_asset(
+    draft_id: str, asset_id: str, user=Depends(require_roles(Role.BRAND_OWNER)), db: Session = Depends(get_db),
+):
+    try:
+        draft = pack_store.get_draft(user.tenant_id, draft_id, user.brand_id)
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "DRAFT_NOT_FOUND", "message": "Knowledge Pack draft not found."})
+    assets = (draft.get("snapshot", {}).get("assets", {}) or {}).get("approved_assets", [])
+    asset = next((item for item in assets if isinstance(item, dict) and item.get("asset_id") == asset_id), None)
+    expected_prefix = f"brand-assets/{user.tenant_id}/{user.brand_id}/{draft_id}/"
+    if not asset or not str(asset.get("storage_key", "")).startswith(expected_prefix):
+        raise HTTPException(404, detail={"code": "ASSET_NOT_FOUND", "message": "Uploaded draft asset not found."})
+    try:
+        storage = get_storage(settings)
+        raw = storage.get_bytes(asset["storage_key"])
+    except FileNotFoundError:
+        raise HTTPException(404, detail={"code": "ASSET_OBJECT_MISSING", "message": "The private asset object is missing."})
+    except StorageUnavailable as exc:
+        raise HTTPException(503, detail={"code": "STORAGE_UNAVAILABLE", "message": "Private asset storage is unavailable."}) from exc
+    if sha256(raw).hexdigest().lower() != str(asset.get("sha256", "")).lower():
+        raise HTTPException(409, detail={"code": "ASSET_HASH_MISMATCH", "message": "The private asset bytes do not match their recorded SHA-256."})
+    result = scan_upload_bytes(raw)
+    scan_status = str(result.get("status", "ERROR")).upper()
+    if scan_status not in {"CLEAN", "INFECTED", "UNAVAILABLE", "ERROR"}:
+        scan_status = "ERROR"
+    updates = {
+        "scan_status": scan_status,
+        "scan_engine": result.get("engine") or "clamav",
+        "scan_scanned_at": result.get("scanned_at"),
+        "scan_signature": result.get("signature"),
+    }
+    try:
+        pack_store.update_scan_record(user.tenant_id, user.brand_id, draft_id, "asset", asset_id, updates, user.id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(409, detail={"code": "ASSET_SCAN_UPDATE_REJECTED", "message": str(exc)}) from exc
+    audit(db, user.tenant_id, user.id, "BRAND_ASSET_RESCANNED", "brand_asset", asset_id, updates, brand_id=user.brand_id)
+    db.commit()
+    return {"asset_id": asset_id, **updates}
+
+
 @router.get("/brands/current/assets/{asset_id}")
 def get_published_brand_asset(asset_id: str, user: CurrentUser):
     active_pack = _active_pack(user)
@@ -583,6 +910,8 @@ def get_published_brand_asset(asset_id: str, user: CurrentUser):
     asset = next((item for item in records if isinstance(item, dict) and item.get("asset_id") == asset_id and item.get("status") == "approved"), None)
     if not asset:
         raise HTTPException(404, detail={"code": "ASSET_NOT_FOUND", "message": "Approved brand asset not found."})
+    if asset.get("storage_key") and asset.get("scan_status") != "CLEAN":
+        raise HTTPException(423, detail={"code": "ASSET_QUARANTINED", "message": "The asset is not available because malware scanning has not succeeded."})
     try:
         if asset.get("storage_key"):
             expected_prefix = f"brand-assets/{user.tenant_id}/{user.brand_id}/"
@@ -634,9 +963,24 @@ def list_submissions(user: CurrentUser, db: DbSession):
     return result
 
 @router.post("/submissions")
-async def create_submission(user: CurrentUser, db: DbSession, file: UploadFile=File(...), title: str=Form("Untitled submission"), channel: str=Form("direct_web"), locale: str=Form("en-IN"), geography: str=Form("IN"), audience: str=Form("consumer"), offer_id: str=Form("OFFER-ORBITA-OCT-NOV-2026"), publication_at: str=Form(...)):
+async def create_submission(
+    user: CurrentUser,
+    db: DbSession,
+    file: UploadFile = File(...),
+    title: str = Form("Untitled submission"),
+    channel: str = Form("direct_web"),
+    locale: str = Form("en-IN"),
+    geography: str = Form("IN"),
+    audience: str = Form("consumer"),
+    offer_id: str = Form("OFFER-ORBITA-OCT-NOV-2026"),
+    intended_use: str = Form("general"),
+    publication_at: str = Form(...),
+):
     active_pack = _active_pack(user)
     if channel not in active_pack.brand.get("channels",[]): raise HTTPException(422,detail={"code":"INVALID_CHANNEL","message":"Channel is not supported by the current Brand Knowledge Pack."})
+    allowed_uses = {"general", "brand_lockup", "campaign", "product_detail", "social_ad", "email_banner", "website_hero", "packaging"}
+    if intended_use not in allowed_uses:
+        raise HTTPException(422, detail={"code": "INVALID_INTENDED_USE", "message": "Select a supported intended content use."})
     if locale not in active_pack.brand.get("supported_locales",[]): raise HTTPException(422,detail={"code":"INVALID_LOCALE","message":"Locale is not supported by this demo pack."})
     data=await file.read(settings.max_upload_bytes+1)
     if len(data)>settings.max_upload_bytes: raise HTTPException(413,detail={"code":"UPLOAD_TOO_LARGE","message":f"Maximum file size is {settings.max_upload_bytes//1024//1024} MB."})
@@ -645,7 +989,7 @@ async def create_submission(user: CurrentUser, db: DbSession, file: UploadFile=F
     try: when=datetime.fromisoformat(publication_at.replace("Z","+00:00"))
     except ValueError: raise HTTPException(422,detail={"code":"INVALID_PUBLICATION_DATE","message":"Use an ISO-8601 date/time with timezone."})
     if when.tzinfo is None: raise HTTPException(422,detail={"code":"TIMEZONE_REQUIRED","message":"Publication time must include a timezone."})
-    submission=models.Submission(tenant_id=user.tenant_id,brand_id=user.brand_id,title=title.strip()[:240] or "Untitled submission",channel=channel,locale=locale,geography=geography,audience=audience,offer_id=offer_id or None,publication_at=when.isoformat(),created_by=user.id)
+    submission=models.Submission(tenant_id=user.tenant_id,brand_id=user.brand_id,title=title.strip()[:240] or "Untitled submission",channel=channel,locale=locale,geography=geography,audience=audience,offer_id=offer_id or None,intended_use=intended_use,publication_at=when.isoformat(),created_by=user.id)
     db.add(submission); db.flush()
     service=ReviewService(db,active_pack,get_storage(settings))
     try:
@@ -1039,7 +1383,7 @@ def create_revision(submission_id: str, payload: RevisionRequest, user: CurrentU
     _ensure_submission_access(user, submission)
     prior=db.get(models.ContentVersion,submission.current_version_id)
     data=payload.content.encode("utf-8")
-    from sigillum.modules.content.extraction import sniff_file
+    from sigillum.modules.content.extraction import extract, sniff_file
     mime=sniff_file("revision.txt",data)
     service=ReviewService(db,_active_pack(user),get_storage(settings))
     try:
@@ -1064,4 +1408,4 @@ def serialize_review(db,submission,version,review):
     if not review: return {"id":submission.id,"title":submission.title,"status":submission.status}
     findings=db.scalars(select(models.Finding).where(models.Finding.review_id==review.id).order_by(models.Finding.created_at)).all()
     decisions=db.scalars(select(models.Decision).where(models.Decision.review_id==review.id).order_by(models.Decision.created_at.desc())).all()
-    return {"submission":{"id":submission.id,"title":submission.title,"status":submission.status,"channel":submission.channel,"locale":submission.locale,"geography":submission.geography,"audience":submission.audience,"offer_id":submission.offer_id,"publication_at":submission.publication_at},"content_version":{"id":version.id,"version_number":version.version_number,"filename":version.filename,"mime_type":version.mime_type,"sha256":version.sha256,"size_bytes":version.size_bytes,"text":version.extracted_text,"extraction_confidence":version.extraction_confidence,"extraction_status":version.extraction_status,"warnings":version.extraction_warnings,"regions":version.regions},"review":{"id":review.id,"status":review.status,"content_hash":review.content_hash,"brand_pack_version":review.brand_pack_version,"knowledge_pack_hash":review.knowledge_pack_hash,"analysis_config_version":review.analysis_config_version,"created_at":review.created_at},"findings":[{"id":f.id,"code":f.code,"category":f.category,"severity":f.severity,"verdict":f.verdict,"title":f.title,"explanation":f.explanation,"reason_code":f.reason_code,"evidence_sufficiency":f.evidence_sufficiency,"confidence":f.confidence,"extraction_confidence":f.extraction_confidence,"content_start":f.content_start,"content_end":f.content_end,"content_quote":f.content_quote,"region":f.region,"evidence":f.evidence,"status":f.status,"resolution_note":f.resolution_note,"suggestions":f.suggestions} for f in findings],"decisions":[{"id":d.id,"action":d.action,"reason":d.reason,"content_hash":d.content_hash,"reviewer_id":d.reviewer_id,"created_at":d.created_at} for d in decisions]}
+    return {"submission":{"id":submission.id,"title":submission.title,"status":submission.status,"channel":submission.channel,"locale":submission.locale,"geography":submission.geography,"audience":submission.audience,"offer_id":submission.offer_id,"intended_use":submission.intended_use,"publication_at":submission.publication_at},"content_version":{"id":version.id,"version_number":version.version_number,"filename":version.filename,"mime_type":version.mime_type,"sha256":version.sha256,"size_bytes":version.size_bytes,"text":version.extracted_text,"extraction_confidence":version.extraction_confidence,"extraction_status":version.extraction_status,"warnings":version.extraction_warnings,"regions":version.regions},"review":{"id":review.id,"status":review.status,"content_hash":review.content_hash,"brand_pack_version":review.brand_pack_version,"knowledge_pack_hash":review.knowledge_pack_hash,"analysis_config_version":review.analysis_config_version,"created_at":review.created_at},"findings":[{"id":f.id,"code":f.code,"category":f.category,"severity":f.severity,"verdict":f.verdict,"title":f.title,"explanation":f.explanation,"reason_code":f.reason_code,"evidence_sufficiency":f.evidence_sufficiency,"confidence":f.confidence,"extraction_confidence":f.extraction_confidence,"content_start":f.content_start,"content_end":f.content_end,"content_quote":f.content_quote,"region":f.region,"evidence":f.evidence,"status":f.status,"resolution_note":f.resolution_note,"suggestions":f.suggestions} for f in findings],"decisions":[{"id":d.id,"action":d.action,"reason":d.reason,"content_hash":d.content_hash,"reviewer_id":d.reviewer_id,"created_at":d.created_at} for d in decisions]}

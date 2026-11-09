@@ -74,6 +74,7 @@ class Submission(Base):
     geography: Mapped[str] = mapped_column(String(20))
     audience: Mapped[str] = mapped_column(String(80), default="consumer")
     offer_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    intended_use: Mapped[str] = mapped_column(String(40), default="general", nullable=False)
     publication_at: Mapped[str] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(40), default="SUBMITTED", index=True)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
@@ -179,4 +180,95 @@ class AuditEvent(Base):
     entity_type: Mapped[str] = mapped_column(String(80))
     entity_id: Mapped[str] = mapped_column(String(80), index=True)
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BrandKnowledgePackHead(Base):
+    """Transactional active-version pointer for one tenant/brand Knowledge Pack."""
+
+    __tablename__ = "brand_knowledge_pack_heads"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "brand_id", name="uq_brand_knowledge_pack_head_scope"),
+        Index("ix_brand_pack_head_scope", "tenant_id", "brand_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(String(80), index=True)
+    brand_id: Mapped[str] = mapped_column(String(100), index=True)
+    pack_id: Mapped[str] = mapped_column(String(100))
+    active_version_id: Mapped[str] = mapped_column(String(40))
+    active_fingerprint: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class BrandKnowledgePackVersion(Base):
+    """Immutable JSON snapshot and provenance for a published pack version."""
+
+    __tablename__ = "brand_knowledge_pack_versions"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "brand_id", "version_id", name="uq_brand_pack_version_scope"),
+        Index("ix_brand_pack_version_history", "tenant_id", "brand_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(String(80), index=True)
+    brand_id: Mapped[str] = mapped_column(String(100), index=True)
+    pack_id: Mapped[str] = mapped_column(String(100))
+    version_id: Mapped[str] = mapped_column(String(40))
+    pack_version: Mapped[str] = mapped_column(String(80))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(40), default="PUBLISHED")
+    base_version_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    created_by: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BrandKnowledgePackDraft(Base):
+    """Mutable, optimistic-concurrency-protected draft for a single brand."""
+
+    __tablename__ = "brand_knowledge_pack_drafts"
+    __table_args__ = (
+        Index("ix_brand_pack_draft_scope", "tenant_id", "brand_id", "status"),
+        Index("ix_brand_pack_draft_updated", "tenant_id", "brand_id", "updated_at"),
+    )
+
+    draft_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(80), index=True)
+    brand_id: Mapped[str] = mapped_column(String(100), index=True)
+    pack_id: Mapped[str] = mapped_column(String(100))
+    base_version_id: Mapped[str] = mapped_column(String(40))
+    base_fingerprint: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(40), default="DRAFT", index=True)
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    validation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    published_version_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    published_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_by: Mapped[str] = mapped_column(String(120))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_by: Mapped[str] = mapped_column(String(120))
+
+
+class BrandKnowledgePackDecision(Base):
+    """Append-only owner decision history for an individual draft record."""
+
+    __tablename__ = "brand_knowledge_pack_decisions"
+    __table_args__ = (
+        Index("ix_brand_pack_decision_record", "tenant_id", "brand_id", "record_type", "record_id"),
+        Index("ix_brand_pack_decision_draft", "draft_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(String(80), index=True)
+    brand_id: Mapped[str] = mapped_column(String(100), index=True)
+    draft_id: Mapped[str] = mapped_column(String(36), index=True)
+    record_type: Mapped[str] = mapped_column(String(40))
+    record_id: Mapped[str] = mapped_column(String(120))
+    decision_status: Mapped[str] = mapped_column(String(40))
+    reason: Mapped[str] = mapped_column(Text)
+    actor_id: Mapped[str] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

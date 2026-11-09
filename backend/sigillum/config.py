@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     sigillum_demo_password: str = "ChangeMe-Local-Only"
     cors_origins: str = "http://localhost:3000"
     tesseract_cmd: str = "tesseract"
+    clamav_host: str = "127.0.0.1"
+    clamav_port: int = 3310
+    clamav_timeout_seconds: int = 30
 
     @field_validator("database_pool_size")
     @classmethod
@@ -49,6 +52,20 @@ class Settings(BaseSettings):
     def valid_database_timeouts(cls, value: int) -> int:
         if value < 1 or value > 300:
             raise ValueError("Database timeouts must be between 1 and 300 seconds")
+        return value
+
+    @field_validator("clamav_port")
+    @classmethod
+    def valid_clamav_port(cls, value: int) -> int:
+        if value < 1 or value > 65535:
+            raise ValueError("CLAMAV_PORT must be between 1 and 65535")
+        return value
+
+    @field_validator("clamav_timeout_seconds")
+    @classmethod
+    def valid_clamav_timeout(cls, value: int) -> int:
+        if value < 1 or value > 300:
+            raise ValueError("CLAMAV_TIMEOUT_SECONDS must be between 1 and 300")
         return value
 
     @field_validator("file_grant_minutes")

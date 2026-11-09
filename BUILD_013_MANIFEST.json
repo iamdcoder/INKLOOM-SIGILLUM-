@@ -1,0 +1,64 @@
+{
+  "project": "Inkloom Sigillum",
+  "build": "013",
+  "base_build": "012",
+  "cumulative_source_snapshot": true,
+  "date": "2026-11-09",
+  "phase": "04 — Brand Control Center and Knowledge Pack lifecycle",
+  "phase_gate": "PARTIALLY IMPLEMENTED — transactional database catalogue, immutable snapshots, revision-safe drafts, guarded publication and decision history implemented; source-document import, malware scanning, richer asset governance/forms, detailed version diff, PostgreSQL runtime verification and browser evidence remain pending",
+  "migration_head": "20261109_0004",
+  "database_migration_added": true,
+  "major_additions": [
+    "Transactional database tables for tenant+brand pack heads, immutable version snapshots, drafts and per-record decisions",
+    "PostgreSQL RLS policies on all four Knowledge Pack catalogue tables",
+    "Database-backed active-version pointer and version history",
+    "Revision compare-and-swap on draft updates",
+    "PostgreSQL row-locked and revision-checked publication with conditional active-head update",
+    "Automatic import of eligible Build 012 filesystem drafts into the database catalogue",
+    "Fingerprint-validated import of the full published Build 012 Knowledge Pack version history and active pointer",
+    "Repairable filesystem compatibility mirrors; private binary assets remain in private storage",
+    "Scoped API endpoint for append-only record decision history",
+    "Database verifier covers 16 required tables and RLS policy presence",
+    "Historical initial migration schema boundary frozen to avoid accidental future-table creation",
+    "Regression coverage for restart reload, stale edits, filesystem draft recovery and decision history"
+  ],
+  "validation": {
+    "backend_tests": {
+      "collected": 100,
+      "passed": 99,
+      "failed": 0,
+      "skipped": 1,
+      "database": "SQLite",
+      "skip_reason": "PostgreSQL-only RLS runtime test; live PostgreSQL service unavailable in authoring environment"
+    },
+    "python_compileall": "PASS — backend, apps, migrations, tests and scripts",
+    "database_migration": "PASS — fresh/repeatable SQLite upgrade to 20261109_0004",
+    "database_verifier": "PASS — SQLite current at 20261109_0004; 16 required tables present; RLS not applicable to SQLite",
+    "golden_evaluation": {
+      "pass": 11,
+      "manual_review_required": 1,
+      "fail": 0,
+      "total": 12
+    },
+    "frontend": "NOT_RUN — Build 013 adds no frontend source changes; full lint/typecheck/build still pending for cumulative Build 011/012 frontend changes",
+    "postgresql_rls_and_concurrency": "PENDING — hosted non-superuser PostgreSQL service required",
+    "live_minio_aws": "NOT_TESTED — no live S3-compatible service available"
+  },
+  "known_limitations": [
+    "Phase 04 remains open: controlled PDF/DOCX source import, malware scanning/quarantine, extended asset policy, guided forms, stronger normalized conflict validation and detailed version diff remain pending",
+    "PostgreSQL RLS and row-lock/concurrent publication runtime remain unverified; SQLite does not exercise RLS or SELECT FOR UPDATE",
+    "Browser walkthrough screenshots and full frontend lint/typecheck/build remain pending",
+    "Impact Radar and knowledge-change re-review remain Phase 14 advanced work",
+    "Phase 03 PostgreSQL RLS and frontend quality gates remain external sign-off requirements"
+  ],
+  "excluded_from_archive": [
+    ".git",
+    ".env and local secret files",
+    "data/ including local database and uploaded originals",
+    ".venv",
+    "node_modules",
+    "build caches",
+    "Python bytecode"
+  ],
+  "disclosure": "Significant ChatGPT assistance used for coding, debugging and documentation. Participant must review, understand and accurately disclose work according to event rules."
+}

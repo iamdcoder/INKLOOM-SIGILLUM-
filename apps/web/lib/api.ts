@@ -32,7 +32,7 @@ export type Finding = {
 };
 export type ReviewPayload = {
   submission: { id: string; title: string; status: string; channel: string; locale: string;
-    geography: string; audience: string; offer_id: string | null; publication_at: string };
+    geography: string; audience: string; offer_id: string | null; intended_use: string; publication_at: string };
   content_version: { id: string; version_number: number; filename: string; mime_type: string;
     sha256: string; size_bytes: number; text: string; extraction_confidence: number;
     extraction_status: string; warnings: string[]; regions: Array<Record<string, unknown>> };

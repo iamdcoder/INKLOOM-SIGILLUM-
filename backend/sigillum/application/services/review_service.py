@@ -117,6 +117,88 @@ class ReviewService:
             })
         return findings
 
+    def _exact_asset_usage_findings(self, submission: models.Submission, version: models.ContentVersion) -> list[dict]:
+        """Apply asset usage rules only when uploaded bytes exactly match an approved asset."""
+        if not str(version.mime_type or "").startswith("image/"):
+            return []
+        manifest = self.pack.assets if isinstance(self.pack.assets, dict) else {}
+        records = manifest.get("approved_assets", [])
+        policies = manifest.get("usage_policies", {})
+        if not isinstance(records, list) or not isinstance(policies, dict):
+            return []
+        matches = [
+            asset for asset in records
+            if isinstance(asset, dict)
+            and asset.get("status") == "approved"
+            and str(asset.get("sha256", "")).lower() == str(version.sha256 or "").lower()
+        ]
+        findings: list[dict] = []
+        publication_at = datetime.fromisoformat(submission.publication_at.replace("Z", "+00:00"))
+        from sigillum.modules.knowledge.asset_policy import asset_policy_violations
+
+        for asset in matches:
+            policy = policies.get(asset.get("kind"))
+            if not isinstance(policy, dict):
+                continue
+            violations = asset_policy_violations(
+                asset,
+                policy,
+                submission.channel,
+                getattr(submission, "intended_use", "general") or "general",
+                publication_at,
+            )
+            for violation in violations:
+                code = violation["code"]
+                stale = "VALIDITY" in code or code == "ASSET_OUTSIDE_VALIDITY"
+                findings.append({
+                    "code": f"BRAND_ASSET_{code}",
+                    "category": "assets",
+                    "severity": policy.get("severity", "review_required"),
+                    "verdict": "STALE" if stale else "CONTRADICTED",
+                    "title": "Approved brand asset is outside its permitted use",
+                    "explanation": violation["message"] + " The exact uploaded file hash matches the approved asset record; the restriction is deterministic for this declared channel, use and publication time.",
+                    "reason_code": code,
+                    "evidence_sufficiency": "SUFFICIENT",
+                    "confidence": 1.0,
+                    "extraction_confidence": float(version.extraction_confidence or 0.0),
+                    "content_start": None,
+                    "content_end": None,
+                    "content_quote": None,
+                    "region": None,
+                    "evidence": [{
+                        "asset_id": asset.get("asset_id"),
+                        "asset_name": asset.get("name"),
+                        "asset_kind": asset.get("kind"),
+                        "asset_sha256": asset.get("sha256"),
+                        "policy": policy,
+                        "channel": submission.channel,
+                        "intended_use": getattr(submission, "intended_use", "general"),
+                        "publication_at": submission.publication_at,
+                    }],
+                    "suggestions": ["Select an asset approved for this channel/use or request a Brand Owner policy update."],
+                })
+            clear_space_ratio = float(policy.get("clear_space_ratio", 0) or 0)
+            if clear_space_ratio > 0:
+                findings.append({
+                    "code": "BRAND_ASSET_CLEAR_SPACE_MANUAL_REVIEW",
+                    "category": "assets",
+                    "severity": "review_required",
+                    "verdict": "NEEDS_MANUAL_REVIEW",
+                    "title": "Brand asset clear space requires visual confirmation",
+                    "explanation": f"The Brand Owner requires {clear_space_ratio:.0%} clear space for this asset. Sigillum has matched the exact approved asset file, but cannot certify the surrounding layout or clear-space geometry automatically.",
+                    "reason_code": "CLEAR_SPACE_REQUIRES_HUMAN_INSPECTION",
+                    "evidence_sufficiency": "INSUFFICIENT",
+                    "confidence": 0.0,
+                    "extraction_confidence": float(version.extraction_confidence or 0.0),
+                    "content_start": None,
+                    "content_end": None,
+                    "content_quote": None,
+                    "region": None,
+                    "evidence": [{"asset_id": asset.get("asset_id"), "required_clear_space_ratio": clear_space_ratio}],
+                    "suggestions": ["Inspect the original creative and confirm the required clear space around the mark."],
+                })
+        return findings
+
     def run_review(self, submission: models.Submission, version: models.ContentVersion):
         review=models.ReviewRun(
             submission_id=submission.id,
@@ -135,6 +217,7 @@ class ReviewService:
         # snapshot is persisted above, so later publication cannot rewrite this run.
         knowledge_as_of = review.created_at or datetime.now(timezone.utc)
         findings=self.engine.analyse(version.extracted_text,context,publication_at,version.extraction_confidence,version.regions,knowledge_as_of=knowledge_as_of)
+        findings.extend(self._exact_asset_usage_findings(submission, version))
         if version.mime_type in {"image/png", "image/jpeg"}:
             # Logo identity remains human-confirmed. Contrast estimates are candidate
             # measurements and remain review-required rather than automatic approval.

@@ -153,3 +153,20 @@
   outline: 2px solid var(--teal);
   outline-offset: 2px;
 }
+
+/* Build 014 — controlled source intake, scan state and immutable version diffs. */
+.knowledge-comparison{display:flex;flex-direction:column;gap:10px;padding:14px 17px 17px;border-top:1px solid var(--line-soft);background:rgba(8,17,24,.24)}
+.knowledge-comparison>.eyebrow{color:var(--teal);font-size:8px;letter-spacing:.12em;font-weight:750}
+.knowledge-comparison-row{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--line-soft);border-radius:8px;background:var(--surface-2)}
+.knowledge-comparison-row>b{font-size:9px;color:var(--text);overflow-wrap:anywhere}
+.knowledge-comparison-row>small{font-size:8px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere}
+.knowledge-comparison-row .status-pill{align-self:flex-start}
+.knowledge-source-upload{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px dashed rgba(85,212,195,.35);border-radius:8px;background:rgba(85,212,195,.035)}
+.knowledge-source-upload>label{display:flex;flex-direction:column;gap:7px;color:#a9bac4;font-size:9px;font-weight:650}
+.knowledge-source-upload input[type=file]{max-width:100%;padding:8px;border:1px solid var(--line);border-radius:7px;background:#0b151e;color:var(--text);font-size:9px}
+.knowledge-source-extraction{display:flex;flex-direction:column;gap:9px;margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:8px;background:rgba(8,18,27,.7)}
+.source-extraction-region{padding:9px;border:1px solid var(--line-soft);border-radius:7px;background:rgba(16,29,39,.55)}
+.source-extraction-region>small{font-size:8px;color:var(--teal);text-transform:uppercase;letter-spacing:.08em}
+.source-extraction-region>p{margin:5px 0 0;color:#cfdbdf;font-size:9px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.text-warning{color:#e8bf78!important}
+@media(max-width:760px){.knowledge-comparison{padding-inline:12px}.knowledge-source-upload{padding:10px}}

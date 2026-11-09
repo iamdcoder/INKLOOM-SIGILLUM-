@@ -557,3 +557,36 @@ def test_image_submission_returns_polygon_regions_and_measurement_status(client)
         assert region["normalised_bbox"]
         assert region["contrast"]["status"] in {"PASS", "FAIL", "UNMEASURABLE"}
     assert any(finding["code"] == "VISUAL_ASSET_MANUAL_REVIEW" for finding in response.json()["findings"])
+
+
+def test_submission_intended_use_is_versioned_and_invalid_use_is_rejected(client):
+    creator = token(client)
+    headers = {"Authorization": f"Bearer {creator}"}
+    fields = {
+        "title": "Asset policy context",
+        "channel": "social",
+        "locale": "en-IN",
+        "geography": "IN",
+        "audience": "consumer",
+        "offer_id": "",
+        "intended_use": "social_ad",
+        "publication_at": "2026-11-12T12:00:00+05:30",
+    }
+    submitted = client.post(
+        "/api/v1/submissions",
+        headers=headers,
+        data=fields,
+        files={"file": ("asset-policy-context.txt", b"A simple campaign description.", "text/plain")},
+    )
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["submission"]["intended_use"] == "social_ad"
+
+    invalid_fields = {**fields, "intended_use": "unrestricted_everywhere"}
+    rejected = client.post(
+        "/api/v1/submissions",
+        headers=headers,
+        data=invalid_fields,
+        files={"file": ("invalid-use.txt", b"A simple campaign description.", "text/plain")},
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "INVALID_INTENDED_USE"

@@ -1,0 +1,60 @@
+{
+  "build": "015",
+  "project": "Inkloom Sigillum",
+  "date": "2026-11-09",
+  "baseline_build": "014",
+  "delivery_type": "cumulative source snapshot",
+  "phase": "04",
+  "phase_name": "Brand Control Center and Knowledge Pack lifecycle",
+  "phase_status": "partial_not_signed_off",
+  "database_revision": "20261109_0005",
+  "database_migration_added": true,
+  "implemented": [
+    "Owner-configurable asset usage policies per asset kind",
+    "Allowed brand channel and controlled intended-use restrictions",
+    "Minimum asset width and height constraints",
+    "Bounded weighted raster palette extraction during brand asset upload",
+    "Measured palette coverage check using documented RGB-distance tolerance",
+    "Explicit ASSET_PALETTE_UNMEASURABLE validation result for legacy assets with no palette",
+    "Policy and asset valid-time checks against intended publication time for exact matches",
+    "Clear-space rules retained as explicit human-review requirements",
+    "Submission intended_use field stored, migrated and included in review serialization",
+    "Exact-SHA-256-match review-time enforcement for channel/use/validity restrictions",
+    "Guided Brand Control Center policy editor which writes to an unpublished draft",
+    "Migration supports fresh SQLite metadata bootstrap and existing Build 014 schema",
+    "Build 015 technical documentation, phase-gate status, manifest and handoff"
+  ],
+  "verification": {
+    "backend_tests": "119 passed, 1 skipped, 0 failed (120 collected)",
+    "python_compile": "pass: backend, apps, migrations, tests and scripts",
+    "sqlite_alembic_head": "20261109_0005",
+    "database_verifier": "16 required tables present; no missing tables; SQLite RLS not applicable",
+    "golden_evaluation": "11 PASS, 1 MANUAL_REVIEW_REQUIRED, 0 FAIL (12 synthetic cases)",
+    "typescript_syntax_parse": "pass for four modified TS/TSX files using TypeScript compiler API",
+    "frontend_npm_ci_lint_typecheck_build": "not completed; npm ci timed out and project-local binaries unavailable",
+    "live_clamav": "not tested",
+    "live_postgresql_rls_and_concurrency": "not tested; PostgreSQL-only RLS test skipped locally",
+    "live_object_storage": "not tested",
+    "browser_e2e": "not tested"
+  },
+  "known_open_items": [
+    "Live non-superuser PostgreSQL RLS and concurrent publication validation",
+    "Live ClamAV daemon and signature-update validation",
+    "Live MinIO/AWS-compatible storage verification",
+    "Full frontend npm ci, lint, typecheck, production build and browser QA",
+    "Guided create/edit forms for facts, policies, terminology and voice",
+    "Broader scoped conflict governance across facts, policies, terms, voice, assets and sources",
+    "Source replacement/version lifecycle and retention/deletion cleanup",
+    "Perceptual asset candidate matching with human confirmation; exact hash only in this build",
+    "Perceptual colour model evaluation; current palette check uses RGB distance",
+    "Phase 04 acceptance gate and sign-off"
+  ],
+  "archive_excludes": [
+    ".git",
+    ".env and real secret files",
+    "local databases and private uploaded originals under data/",
+    ".venv and other virtual environments",
+    "node_modules and frontend build caches",
+    "Python bytecode and test caches"
+  ]
+}

@@ -1,6 +1,22 @@
 # Verification record — current MVP
 
-**Latest update:** 2026-11-09, Build 010. Older entries below are retained as historical checkpoints; current results are summarised first.
+**Latest update:** 2026-11-09, Build 015. Older entries below are retained as historical checkpoints; current results are summarised first.
+
+
+## Build 015 — asset usage policies and intended-use context
+
+| Check | Result | Notes |
+|---|---|---|
+| `python -m pytest -q -rA` | **119 passed, 1 skipped, 0 failed (120 collected)** | SQLite/local suite; the skipped test exercises PostgreSQL RLS only. |
+| Python `compileall` | **Passed** | Backend, apps, migrations, tests and scripts. |
+| `python scripts/verify_database.py` | **Passed** | SQLite at `20261109_0005`; all 16 required tables present; no missing tables. |
+| Golden evaluation | **11 PASS / 1 MANUAL_REVIEW_REQUIRED / 0 FAIL** | Twelve deterministic synthetic cases; visual logo/contrast case remains manual. |
+| TypeScript syntax parsing | **Passed** | Four changed TS/TSX files parsed by the TypeScript compiler API. This is not a project typecheck. |
+| `npm ci` | **Timed out** | No project-local Next/ESLint/TypeScript binaries were available afterward. |
+| Frontend lint/typecheck/build | **Not verified** | Must be run on a working dependency installation. |
+| Live PostgreSQL, ClamAV, MinIO, browser E2E | **Not run** | Not claimed as verified. |
+
+Build 015 adds owner-authored asset use policy configuration, measured palette and dimension validation, controlled submission intended use, exact-SHA-256-match review-time policy checks, and migration `20261109_0005`. See `docs/technical/BUILD_015_ASSET_USAGE_POLICIES.md`.
 
 ## Build 010 — database lifecycle
 

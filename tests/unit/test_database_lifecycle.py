@@ -81,6 +81,10 @@ def test_alembic_upgrade_from_empty_sqlite_database_is_repeatable(tmp_path):
                 "patches",
                 "decisions",
                 "audit_events",
+                "brand_knowledge_pack_heads",
+                "brand_knowledge_pack_versions",
+                "brand_knowledge_pack_drafts",
+                "brand_knowledge_pack_decisions",
             }.issubset(tables)
 
         upgrade_database(settings)
@@ -161,3 +165,29 @@ def test_postgresql_rls_verifier_accepts_command_specific_membership_policies():
 def test_postgresql_rls_verifier_rejects_missing_membership_policy():
     result = _verify_postgresql_rls(_FakeRLSConnection(membership_policy_count=2))
     assert result["status"] == "incomplete"
+
+
+def test_upgrade_from_build_014_schema_adds_submission_intended_use(tmp_path):
+    from sqlalchemy import inspect
+
+    database_file = tmp_path / "migration" / "build014.db"
+    settings = Settings(
+        _env_file=None,
+        database_url=f"sqlite:///{database_file.as_posix()}",
+    )
+    upgrade_database(settings, "20261109_0004")
+    engine = create_database_engine(settings.database_url)
+    try:
+        with engine.begin() as connection:
+            # Current ORM metadata is also used during the initial bootstrap;
+            # simulate a database whose physical schema is still at Build 014.
+            connection.exec_driver_sql("ALTER TABLE submissions DROP COLUMN intended_use")
+        with engine.connect() as connection:
+            assert "intended_use" not in {column["name"] for column in inspect(connection).get_columns("submissions")}
+        upgrade_database(settings)
+        with engine.connect() as connection:
+            columns = {column["name"]: column for column in inspect(connection).get_columns("submissions")}
+            assert columns["intended_use"]["nullable"] is False
+            assert str(columns["intended_use"]["default"]).strip("'\"") == "general"
+    finally:
+        engine.dispose()

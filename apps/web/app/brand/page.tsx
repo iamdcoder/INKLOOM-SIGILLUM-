@@ -64,6 +64,15 @@ type SourceRecord = {
   owner_id?: string;
   approved_by?: string;
   approved_at?: string;
+  original_filename?: string;
+  storage_key?: string;
+  scan_status?: "PENDING" | "CLEAN" | "INFECTED" | "UNAVAILABLE" | "ERROR";
+  scan_engine?: string;
+  scan_scanned_at?: string | null;
+  extraction_status?: string;
+  extraction_warnings?: string[];
+  region_count?: number;
+  reference_text?: string | null;
 };
 
 type AssetRecord = {
@@ -77,6 +86,8 @@ type AssetRecord = {
   width?: number;
   height?: number;
   approved_by?: string;
+  scan_status?: "PENDING" | "CLEAN" | "INFECTED" | "UNAVAILABLE" | "ERROR";
+  scan_scanned_at?: string | null;
 };
 
 type PackSnapshot = {
@@ -113,6 +124,29 @@ type DraftPayload = {
   base_version_id: string;
   status: string;
   snapshot: PackSnapshot;
+};
+
+type VersionComparison = {
+  from_version_id: string;
+  to_version_id: string;
+  change_count: number;
+  truncated: boolean;
+  changes: Array<{
+    section: string;
+    record_id: string;
+    change: "ADDED" | "REMOVED" | "CHANGED";
+    fields: Array<{ field: string; before: string; after: string }>;
+    before?: Record<string, unknown>;
+    after?: Record<string, unknown>;
+  }>;
+};
+
+type SourceExtraction = {
+  text_characters: number;
+  regions_total: number;
+  regions_returned: number;
+  warnings: string[];
+  regions: Array<{ kind?: string; text?: string; page?: number; paragraph?: number }>;
 };
 
 type ValidationResult = {
@@ -165,10 +199,26 @@ export default function BrandPage() {
   const [sourceType, setSourceType] = useState("reference_text");
   const [sourceText, setSourceText] = useState("");
   const [sourceUri, setSourceUri] = useState("");
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [sourceExtraction, setSourceExtraction] = useState<{ sourceId: string; manifest: SourceExtraction } | null>(null);
+  const [compareFrom, setCompareFrom] = useState("");
+  const [compareTo, setCompareTo] = useState("");
+  const [comparison, setComparison] = useState<VersionComparison | null>(null);
   const [assetName, setAssetName] = useState("");
   const [assetKind, setAssetKind] = useState("logo");
   const [assetFile, setAssetFile] = useState<File | null>(null);
   const [assetPreviews, setAssetPreviews] = useState<Record<string, string>>({});
+  const [assetPolicyKind, setAssetPolicyKind] = useState("logo");
+  const [assetPolicyChannels, setAssetPolicyChannels] = useState("");
+  const [assetPolicyUses, setAssetPolicyUses] = useState("");
+  const [assetPolicyMinWidth, setAssetPolicyMinWidth] = useState("0");
+  const [assetPolicyMinHeight, setAssetPolicyMinHeight] = useState("0");
+  const [assetPolicyPalette, setAssetPolicyPalette] = useState("");
+  const [assetPolicyTolerance, setAssetPolicyTolerance] = useState("80");
+  const [assetPolicyMatchRatio, setAssetPolicyMatchRatio] = useState("0.7");
+  const [assetPolicyClearSpace, setAssetPolicyClearSpace] = useState("0");
+  const [assetPolicyValidFrom, setAssetPolicyValidFrom] = useState("");
+  const [assetPolicyValidUntil, setAssetPolicyValidUntil] = useState("");
 
   async function refreshManagement() {
     const [current, detail] = await Promise.all([
@@ -177,6 +227,12 @@ export default function BrandPage() {
     ]);
     setSummary(current);
     setManagement(detail);
+    if (detail.versions.length > 0) {
+      const ordered = [...detail.versions].sort((a, b) => a.version_id.localeCompare(b.version_id));
+      setCompareTo(detail.active_version.version_id);
+      if (ordered.length > 1) setCompareFrom(ordered[ordered.length - 2].version_id);
+      else setCompareFrom("");
+    }
   }
 
   useEffect(() => {
@@ -195,7 +251,12 @@ export default function BrandPage() {
     if (canViewManagement) {
       api<ManagementPayload>("/brands/current/management")
         .then((result) => {
-          if (!cancelled) setManagement(result);
+          if (!cancelled) {
+            setManagement(result);
+            const ordered = [...result.versions].sort((a, b) => a.version_id.localeCompare(b.version_id));
+            setCompareTo(result.active_version.version_id);
+            if (ordered.length > 1) setCompareFrom(ordered[ordered.length - 2].version_id);
+          }
         })
         .catch((reason: unknown) => {
           if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load Knowledge Pack management details.");
@@ -239,6 +300,86 @@ export default function BrandPage() {
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [activeSection, draft]);
+
+  useEffect(() => {
+    if (!draft || activeSection !== "assets") return;
+    const manifest = draft.snapshot.assets as Record<string, unknown>;
+    const policies = (manifest.usage_policies && typeof manifest.usage_policies === "object"
+      ? manifest.usage_policies : {}) as Record<string, Record<string, unknown>>;
+    const policy = policies[assetPolicyKind] || {};
+    setAssetPolicyChannels(Array.isArray(policy.allowed_channels) ? policy.allowed_channels.join(", ") : "");
+    setAssetPolicyUses(Array.isArray(policy.allowed_uses) ? policy.allowed_uses.join(", ") : "");
+    setAssetPolicyMinWidth(String(policy.min_width ?? 0));
+    setAssetPolicyMinHeight(String(policy.min_height ?? 0));
+    setAssetPolicyPalette(Array.isArray(policy.palette_hex) ? policy.palette_hex.join(", ") : "");
+    setAssetPolicyTolerance(String(policy.palette_tolerance ?? 80));
+    setAssetPolicyMatchRatio(String(policy.minimum_palette_match_ratio ?? 0.7));
+    setAssetPolicyClearSpace(String(policy.clear_space_ratio ?? 0));
+    setAssetPolicyValidFrom(typeof policy.valid_from === "string" ? policy.valid_from.slice(0, 16) : "");
+    setAssetPolicyValidUntil(typeof policy.valid_until === "string" ? policy.valid_until.slice(0, 16) : "");
+  }, [draft?.draft_id, draft?.snapshot.assets, activeSection, assetPolicyKind]);
+
+  async function saveAssetUsagePolicy() {
+    if (!draft) return;
+    const splitValues = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
+    const asIso = (value: string) => value ? new Date(value).toISOString() : null;
+    const minWidth = Number(assetPolicyMinWidth || 0);
+    const minHeight = Number(assetPolicyMinHeight || 0);
+    const tolerance = Number(assetPolicyTolerance || 0);
+    const matchRatio = Number(assetPolicyMatchRatio || 0);
+    const clearSpace = Number(assetPolicyClearSpace || 0);
+    if (![minWidth, minHeight, tolerance, matchRatio, clearSpace].every(Number.isFinite)) {
+      setError("Asset policy numeric fields must contain valid numbers.");
+      return;
+    }
+    if (assetPolicyValidFrom && assetPolicyValidUntil && new Date(assetPolicyValidUntil) < new Date(assetPolicyValidFrom)) {
+      setError("Asset policy end time must not precede its start time.");
+      return;
+    }
+    const currentManifest = draft.snapshot.assets as Record<string, unknown>;
+    const existingPolicies = (currentManifest.usage_policies && typeof currentManifest.usage_policies === "object"
+      ? currentManifest.usage_policies : {}) as Record<string, unknown>;
+    const nextManifest = {
+      ...currentManifest,
+      usage_policies: {
+        ...existingPolicies,
+        [assetPolicyKind]: {
+          allowed_channels: splitValues(assetPolicyChannels),
+          allowed_uses: splitValues(assetPolicyUses),
+          min_width: minWidth,
+          min_height: minHeight,
+          palette_hex: splitValues(assetPolicyPalette).map((value) => value.toUpperCase()),
+          palette_tolerance: tolerance,
+          minimum_palette_match_ratio: matchRatio,
+          clear_space_ratio: clearSpace,
+          valid_from: asIso(assetPolicyValidFrom),
+          valid_until: asIso(assetPolicyValidUntil),
+          severity: "review_required",
+        },
+      },
+    };
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/brands/current/drafts/${draft.draft_id}/section`, {
+        method: "PUT",
+        body: JSON.stringify({ section: "assets", content: nextManifest }),
+      });
+      setDraft((current) => current ? {
+        ...current,
+        status: "DRAFT",
+        snapshot: { ...current.snapshot, assets: nextManifest },
+      } : current);
+      setEditorText(JSON.stringify(nextManifest, null, 2));
+      setValidation(null);
+      setNotice(`${assetPolicyKind.replaceAll("_", " ")} usage policy saved to this draft. It will govern only after pack publication.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to save the asset usage policy.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function startDraft() {
     setBusy(true);
@@ -331,6 +472,141 @@ export default function BrandPage() {
     }
   }
 
+  async function uploadSourceDocument() {
+    if (!draft || !sourceFile) {
+      setError("Choose a PDF or DOCX source document before uploading.");
+      return;
+    }
+    if (!sourceName.trim()) {
+      setError("Enter a name for the source document.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const form = new FormData();
+      form.append("file", sourceFile);
+      form.append("name", sourceName.trim());
+      form.append("source_type", sourceType);
+      form.append("version", "1");
+      const result = await api<{ source: SourceRecord }>(`/brands/current/drafts/${draft.draft_id}/sources/upload`, {
+        method: "POST",
+        body: form,
+      });
+      const registry = draft.snapshot.sources || { schema_version: "1.0.0", sources: [] };
+      const nextRegistry = { ...registry, sources: [...registry.sources, result.source] };
+      setDraft((current) => current ? { ...current, status: "DRAFT", snapshot: { ...current.snapshot, sources: nextRegistry } } : current);
+      if (activeSection === "sources") setEditorText(JSON.stringify(nextRegistry, null, 2));
+      setSourceFile(null);
+      setSourceName("");
+      setValidation(null);
+      setNotice(result.source.scan_status === "CLEAN"
+        ? "Source uploaded, malware-scanned and extracted. It is still non-authoritative until owner approval and pack publication."
+        : `Source uploaded to quarantine. Scanner status: ${result.source.scan_status || "PENDING"}. It cannot be approved or downloaded until scanning succeeds.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to upload the source document.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rescanSourceDocument(sourceId: string) {
+    if (!draft) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{ scan_status: string; extraction_status: string }>(
+        `/brands/current/drafts/${draft.draft_id}/sources/${sourceId}/scan`, { method: "POST" },
+      );
+      const latest = await api<DraftPayload>(`/brands/current/drafts/${draft.draft_id}`);
+      setDraft(latest);
+      setEditorText(JSON.stringify(latest.snapshot[activeSection] ?? {}, null, 2));
+      setValidation(null);
+      setNotice(`Source scan: ${result.scan_status}. Extraction: ${result.extraction_status}.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to rescan this source document.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openSourceExtraction(sourceId: string) {
+    if (!draft) return;
+    setBusy(true);
+    setError("");
+    try {
+      const manifest = await api<SourceExtraction>(`/brands/current/drafts/${draft.draft_id}/sources/${sourceId}/extraction`);
+      setSourceExtraction({ sourceId, manifest });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to open extracted source text.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadSourceDocument(source: SourceRecord) {
+    if (!draft) return;
+    try {
+      const token = getToken();
+      const response = await fetch(`${API_BASE}/brands/current/drafts/${draft.draft_id}/sources/${source.source_id}/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(`Download failed (${response.status}). The source may still be quarantined.`);
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = source.original_filename || `${source.name}.bin`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to download this source document.");
+    }
+  }
+
+  async function comparePublishedVersions() {
+    if (!compareFrom || !compareTo || compareFrom === compareTo) {
+      setError("Choose two different published versions to compare.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const query = new URLSearchParams({ from_version_id: compareFrom, to_version_id: compareTo });
+      const result = await api<VersionComparison>(`/brands/current/versions/compare?${query.toString()}`);
+      setComparison(result);
+      setNotice(`${result.change_count} change(s) found between ${compareFrom} and ${compareTo}.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to compare the selected published versions.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rescanBrandAsset(assetId: string) {
+    if (!draft) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{ scan_status: string }>(`/brands/current/drafts/${draft.draft_id}/assets/${assetId}/scan`, { method: "POST" });
+      const latest = await api<DraftPayload>(`/brands/current/drafts/${draft.draft_id}`);
+      setDraft(latest);
+      setEditorText(JSON.stringify(latest.snapshot[activeSection] ?? {}, null, 2));
+      setValidation(null);
+      setNotice(`Asset malware scan status: ${result.scan_status}.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to rescan this asset.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function uploadBrandAsset() {
     if (!draft || !assetFile) {
       setError("Choose a PNG, JPEG or WebP image before uploading.");
@@ -348,18 +624,14 @@ export default function BrandPage() {
         method: "POST",
         body: form,
       });
-      setDraft((current) => {
-        if (!current) return current;
-        const currentAssets = (current.snapshot.assets.approved_assets as AssetRecord[] | undefined) || [];
-        return {
-          ...current,
-          status: "DRAFT",
-          snapshot: {
-            ...current.snapshot,
-            assets: { ...current.snapshot.assets, approved_assets: [...currentAssets, result.asset] },
-          },
-        };
-      });
+      const currentAssets = (draft.snapshot.assets.approved_assets as AssetRecord[] | undefined) || [];
+      const nextAssets = { ...draft.snapshot.assets, approved_assets: [...currentAssets, result.asset] };
+      setDraft((current) => current ? {
+        ...current,
+        status: "DRAFT",
+        snapshot: { ...current.snapshot, assets: nextAssets },
+      } : current);
+      if (activeSection === "assets") setEditorText(JSON.stringify(nextAssets, null, 2));
       setAssetFile(null);
       setAssetName("");
       setValidation(null);
@@ -539,6 +811,32 @@ export default function BrandPage() {
               </div>
             ))}
           </div>
+          {management.versions.length > 1 && (
+            <div className="knowledge-comparison">
+              <div className="eyebrow">IMMUTABLE VERSION COMPARISON</div>
+              <div className="knowledge-guided-grid">
+                <label>From version<select value={compareFrom} onChange={(event) => setCompareFrom(event.target.value)}>
+                  {management.versions.map((version) => <option key={version.version_id} value={version.version_id}>{version.pack_version} · {version.version_id}</option>)}
+                </select></label>
+                <label>To version<select value={compareTo} onChange={(event) => setCompareTo(event.target.value)}>
+                  {management.versions.map((version) => <option key={version.version_id} value={version.version_id}>{version.pack_version} · {version.version_id}</option>)}
+                </select></label>
+              </div>
+              <button className="button secondary" onClick={comparePublishedVersions} disabled={busy || !compareFrom || !compareTo || compareFrom === compareTo}>Compare published versions</button>
+              {comparison && <div className="knowledge-record-list">
+                <p className="knowledge-guided-note">{comparison.change_count} record-level change(s){comparison.truncated ? " · results truncated at the safety limit" : ""}.</p>
+                {comparison.changes.map((change, index) => (
+                  <div className="knowledge-comparison-row" key={`${change.section}-${change.record_id}-${index}`}>
+                    <b>{change.section} · {change.record_id}</b><span className="status-pill neutral"><i />{change.change}</span>
+                    {change.fields.map((field) => <small key={field.field}><b>{field.field}</b>: {field.before || "(empty)"} → {field.after || "(empty)"}</small>)}
+                    {change.change === "ADDED" && <small>New record: {JSON.stringify(change.after)}</small>}
+                    {change.change === "REMOVED" && <small>Removed record: {JSON.stringify(change.before)}</small>}
+                  </div>
+                ))}
+                {comparison.changes.length === 0 && <p className="knowledge-guided-empty">No differences were found between these versions.</p>}
+              </div>}
+            </div>
+          )}
           {!canEdit && <div className="alert info knowledge-readonly"><LockKeyhole size={14} /> You can inspect published versions. Only the Brand Owner can change and publish authoritative brand truth.</div>}
         </section>
       )}
@@ -645,28 +943,62 @@ export default function BrandPage() {
                         <label className="wide">Source URI (optional)<input value={sourceUri} onChange={(event) => setSourceUri(event.target.value)} placeholder="https://..." maxLength={2048} /></label>
                       </div>
                       <button className="button secondary" onClick={addSourceRecord} disabled={busy}><Plus size={14} /> Register source as draft</button>
+                      <div className="knowledge-source-upload">
+                        <div className="eyebrow">CONTROLLED DOCUMENT INTAKE</div>
+                        <p className="knowledge-guided-note">PDF and DOCX uploads are stored privately, malware-scanned before parsing, and kept non-authoritative until explicit owner approval and publication. Scanner outage leaves the file quarantined.</p>
+                        <label>PDF or DOCX source file<input type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" onChange={(event) => setSourceFile(event.target.files?.[0] || null)} /></label>
+                        <button className="button secondary" onClick={uploadSourceDocument} disabled={busy || !sourceFile || !sourceName.trim()}><UploadCloud size={14} /> Upload and scan source</button>
+                      </div>
                       <div className="knowledge-record-list">
                         {draftSources.map((source) => (
                           <div className="knowledge-record-row" key={source.source_id}>
-                            <div><b>{source.name}</b><small>{source.source_id} · v{source.version} · {source.source_type}</small><small>{source.sha256 ? `SHA-256 ${shortHash(source.sha256)}` : source.source_uri || "Reference text retained in registry"}</small></div>
+                            <div><b>{source.name}</b><small>{source.source_id} · v{source.version} · {source.source_type}</small><small>{source.sha256 ? `SHA-256 ${shortHash(source.sha256)}` : source.source_uri || "Reference text retained in registry"}</small>
+                              {source.storage_key && <small>Malware scan: {source.scan_status || "PENDING"} · extraction: {source.extraction_status || "PENDING"} · {source.region_count || 0} region(s)</small>}
+                              {(source.extraction_warnings || []).map((warning) => <small className="text-warning" key={warning}>{warning}</small>)}
+                            </div>
                             <span className={`status-pill ${source.status === "approved" ? "success" : "warning"}`}><i />{source.status}</span>
-                            {source.status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("source", source.source_id, "approved")} disabled={busy}>Approve</button>}
+                            {source.storage_key && <span className={`status-pill ${source.scan_status === "CLEAN" ? "success" : "warning"}`}><i />{source.scan_status || "PENDING"}</span>}
+                            {source.storage_key && source.scan_status !== "CLEAN" && <button className="button secondary" onClick={() => rescanSourceDocument(source.source_id)} disabled={busy}>Retry scan</button>}
+                            {source.storage_key && source.scan_status === "CLEAN" && <><button className="button secondary" onClick={() => openSourceExtraction(source.source_id)} disabled={busy}>View extraction</button><button className="button secondary" onClick={() => downloadSourceDocument(source)}>Download</button></>}
+                            {source.status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("source", source.source_id, "approved")} disabled={busy || Boolean(source.storage_key && (source.scan_status !== "CLEAN" || source.extraction_status !== "COMPLETED"))}>Approve</button>}
                             {source.status !== "rejected" && <button className="button secondary" onClick={() => decideKnowledgeRecord("source", source.source_id, "rejected")} disabled={busy}>Reject</button>}
                           </div>
                         ))}
                         {draftSources.length === 0 && <p className="knowledge-guided-empty">No sources registered in this draft yet.</p>}
                       </div>
+                      {sourceExtraction && <div className="knowledge-source-extraction">
+                        <div className="knowledge-editor-toolbar"><b>Extracted source regions · {sourceExtraction.sourceId}</b><button className="button secondary" onClick={() => setSourceExtraction(null)}>Close</button></div>
+                        <p className="knowledge-guided-note">{sourceExtraction.manifest.text_characters} characters · {sourceExtraction.manifest.regions_returned}/{sourceExtraction.manifest.regions_total} regions retained.</p>
+                        {sourceExtraction.manifest.regions.map((region, index) => <div className="source-extraction-region" key={`${sourceExtraction.sourceId}-${index}`}><small>{region.kind || "TEXT"}{region.page ? ` · page ${region.page}` : ""}{region.paragraph ? ` · paragraph ${region.paragraph}` : ""}</small><p>{region.text || "(no text)"}</p></div>)}
+                        {sourceExtraction.manifest.warnings.map((warning) => <small className="text-warning" key={warning}>{warning}</small>)}
+                      </div>}
                     </div>
                   )}
                   {activeSection === "assets" && (
                     <div className="knowledge-guided-panel">
+                      <div className="eyebrow">OWNER-CONFIGURED ASSET USAGE POLICY</div>
+                      <p className="knowledge-guided-note">Set channel/use restrictions, minimum pixel dimensions, approved palette tolerance, clear-space requirement and validity. Palette is a bounded RGB estimate; clear-space always remains a human inspection.</p>
+                      <div className="knowledge-guided-grid">
+                        <label>Asset kind<select value={assetPolicyKind} onChange={(event) => setAssetPolicyKind(event.target.value)}><option value="logo">Logo</option><option value="product_image">Product image</option><option value="campaign_image">Campaign image</option><option value="icon">Icon</option><option value="other">Other</option></select></label>
+                        <label>Allowed channels (comma-separated)<input value={assetPolicyChannels} onChange={(event) => setAssetPolicyChannels(event.target.value)} placeholder="direct_web, social" /></label>
+                        <label className="wide">Allowed uses (comma-separated)<input value={assetPolicyUses} onChange={(event) => setAssetPolicyUses(event.target.value)} placeholder="brand_lockup, campaign, social_ad" /></label>
+                        <label>Minimum width (px)<input type="number" min="0" max="20000" value={assetPolicyMinWidth} onChange={(event) => setAssetPolicyMinWidth(event.target.value)} /></label>
+                        <label>Minimum height (px)<input type="number" min="0" max="20000" value={assetPolicyMinHeight} onChange={(event) => setAssetPolicyMinHeight(event.target.value)} /></label>
+                        <label className="wide">Approved palette hex colours<input value={assetPolicyPalette} onChange={(event) => setAssetPolicyPalette(event.target.value)} placeholder="#123ABC, #F0F0F0" /></label>
+                        <label>RGB tolerance (0–441.7)<input type="number" min="0" max="441.7" step="0.1" value={assetPolicyTolerance} onChange={(event) => setAssetPolicyTolerance(event.target.value)} /></label>
+                        <label>Minimum palette match (0–1)<input type="number" min="0" max="1" step="0.05" value={assetPolicyMatchRatio} onChange={(event) => setAssetPolicyMatchRatio(event.target.value)} /></label>
+                        <label>Clear-space ratio (0–0.5)<input type="number" min="0" max="0.5" step="0.01" value={assetPolicyClearSpace} onChange={(event) => setAssetPolicyClearSpace(event.target.value)} /></label>
+                        <label>Valid from<input type="datetime-local" value={assetPolicyValidFrom} onChange={(event) => setAssetPolicyValidFrom(event.target.value)} /></label>
+                        <label>Valid until<input type="datetime-local" value={assetPolicyValidUntil} onChange={(event) => setAssetPolicyValidUntil(event.target.value)} /></label>
+                      </div>
+                      <button className="button secondary" onClick={saveAssetUsagePolicy} disabled={busy}><Save size={14} /> Save usage policy to draft</button>
                       <div className="eyebrow">UPLOAD BRAND ASSET</div>
                       <div className="knowledge-guided-grid">
                         <label>Display name<input value={assetName} onChange={(event) => setAssetName(event.target.value)} placeholder="Primary campaign logo" maxLength={160} /></label>
                         <label>Asset type<select value={assetKind} onChange={(event) => setAssetKind(event.target.value)}><option value="logo">Logo</option><option value="product_image">Product image</option><option value="campaign_image">Campaign image</option><option value="icon">Icon</option><option value="other">Other</option></select></label>
                         <label className="wide">Image file<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setAssetFile(event.target.files?.[0] || null)} /></label>
                       </div>
-                      <p className="knowledge-guided-note">PNG, JPEG or WebP only. SVG/script-bearing files are rejected. Uploads remain private and unapproved until an owner decision. Raster decoding and size checks are applied; a separate malware-scanning service is not yet integrated.</p>
+                      <p className="knowledge-guided-note">PNG, JPEG or WebP only. SVG/script-bearing files are rejected. Uploads remain private and unapproved until an owner decision. Raster decoding, size checks and fail-closed malware scanning are applied.</p>
                       <button className="button secondary" onClick={uploadBrandAsset} disabled={busy || !assetFile}><UploadCloud size={14} /> Upload as draft asset</button>
                       <div className="knowledge-record-list">
                         {draftAssets.map((asset) => (
@@ -674,7 +1006,9 @@ export default function BrandPage() {
                             {assetPreviews[asset.asset_id] ? <img src={assetPreviews[asset.asset_id]} alt={`Preview of ${asset.name}`} /> : <div className="knowledge-asset-placeholder"><ShieldCheck size={17} /></div>}
                             <div><b>{asset.name}</b><small>{asset.asset_id} · {asset.kind} · {asset.mime_type || "legacy asset"}</small><small>{asset.sha256 ? `SHA-256 ${shortHash(asset.sha256)}` : "Seeded asset record"}</small></div>
                             <span className={`status-pill ${asset.status === "approved" ? "success" : "warning"}`}><i />{asset.status}</span>
-                            {asset.status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("asset", asset.asset_id, "approved")} disabled={busy || !asset.storage_key}>Approve</button>}
+                            {asset.storage_key && <span className={`status-pill ${asset.scan_status === "CLEAN" ? "success" : "warning"}`}><i />{asset.scan_status || "PENDING"}</span>}
+                            {asset.storage_key && asset.scan_status !== "CLEAN" && <button className="button secondary" onClick={() => rescanBrandAsset(asset.asset_id)} disabled={busy}>Retry scan</button>}
+                            {asset.status !== "approved" && <button className="button secondary" onClick={() => decideKnowledgeRecord("asset", asset.asset_id, "approved")} disabled={busy || !asset.storage_key || asset.scan_status !== "CLEAN"}>Approve</button>}
                             {asset.status !== "rejected" && <button className="button secondary" onClick={() => decideKnowledgeRecord("asset", asset.asset_id, "rejected")} disabled={busy}>Reject</button>}
                           </div>
                         ))}

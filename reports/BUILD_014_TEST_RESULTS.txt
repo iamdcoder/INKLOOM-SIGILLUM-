@@ -1,0 +1,36 @@
+INKLOOM SIGILLUM — BUILD 014 TEST RECORD
+Date: 2026-11-09
+Baseline: Build 013
+Phase: 04 — Brand Control Center / Knowledge Pack lifecycle (partial)
+
+BACKEND REGRESSION
+Command: pytest -q -rA --disable-warnings
+Result: 108 passed, 1 skipped, 0 failed (109 collected).
+The skipped test is PostgreSQL-only RLS enforcement. The current local database is SQLite; this result does not prove PostgreSQL row-level security or row-lock/concurrent publication behaviour.
+
+PYTHON SOURCE COMPILATION
+Command: python -m compileall -q backend apps migrations tests scripts
+Result: PASS in the final packaging pass.
+
+DATABASE MIGRATION / SCHEMA
+Command: python -m alembic upgrade head
+Result: PASS; local SQLite database is at revision 20261109_0004. Build 014 adds no migration.
+
+DATABASE VERIFIER
+Command: python scripts/verify_database.py
+Result: PASS; all 16 required tables present. PostgreSQL RLS and pgvector are not applicable to the SQLite local run.
+
+SYNTHETIC GOLDEN EVALUATION
+Command: python scripts/evaluate_golden_cases.py
+Result: 11 automated PASS, 1 MANUAL_REVIEW_REQUIRED, 0 FAIL (12 cases). The manual case is a visual asset/contrast case that intentionally requires human inspection. This is not an externally validated accuracy metric.
+
+FRONTEND SOURCE CHECK
+A TypeScript compiler API TSX parse check of apps/web/app/brand/page.tsx reported TSX_PARSE_PASS. Full npm ci / npm run lint / npm run typecheck / npm run build were NOT completed: dependency installation timed out and local node_modules binaries/types were unavailable. Do not treat the frontend production build as verified.
+
+EXTERNAL SERVICE VERIFICATION NOT PERFORMED
+- Live ClamAV daemon and signature database update/recovery not exercised; scanner protocol is covered by fake-socket unit tests.
+- Live PostgreSQL non-superuser RLS, row-lock and concurrent-publication tests not exercised.
+- Live MinIO/AWS-compatible storage endpoint not exercised.
+- Browser E2E walkthrough not completed.
+
+Build 014 acceptance is limited to the implemented source-intake, malware-gating, extraction/download controls, asset scan gating, provenance editor guard and immutable version comparison paths. Phase 04 remains open.

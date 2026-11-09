@@ -29,6 +29,10 @@ RLS_TABLES = (
     "patches",
     "decisions",
     "audit_events",
+    "brand_knowledge_pack_heads",
+    "brand_knowledge_pack_versions",
+    "brand_knowledge_pack_drafts",
+    "brand_knowledge_pack_decisions",
 )
 RLS_REQUIRED_POLICY_COUNTS = {"memberships": 3}
 

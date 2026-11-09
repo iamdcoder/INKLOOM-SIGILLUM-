@@ -1,8 +1,8 @@
-"""Immutable, filesystem-backed Brand Knowledge Pack version and draft store.
+"""Transactional Brand Knowledge Pack catalogue with private file storage.
 
-The transactional database remains the review/audit source of truth. This store
-keeps pack binaries and JSON snapshots versioned outside application code, with
-an atomic active-version pointer and optimistic concurrency checks.
+The database owns pack metadata, immutable JSON snapshots, drafts, decisions and
+the active-version pointer. The configured storage adapter retains private
+binary assets; filesystem JSON files are compatibility/export mirrors only.
 """
 from __future__ import annotations
 
@@ -10,13 +10,20 @@ import json
 import re
 import shutil
 import threading
+from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import uuid4
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from sigillum.modules.knowledge.brand_pack import BrandPack
+from sigillum.modules.knowledge.asset_policy import palette_match_ratio, validate_usage_policies
+from sigillum.infrastructure.database import models
+from sigillum.infrastructure.database.session import set_database_scope
 
 SECTION_NAMES = {"brand", "facts", "policies", "terminology", "voice", "assets", "sources"}
 SECTION_FILES = {
@@ -57,19 +64,332 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 class KnowledgePackStore:
     """Stores immutable Knowledge Packs in tenant *and brand* namespaces.
 
-    Published versions are immutable snapshots. Drafts are scoped to one brand,
-    and a new non-demo brand receives an empty starter pack rather than another
-    brand's synthetic facts or assets. Filesystem storage is a single-host
-    adapter; production multi-instance publication locking remains a deployment
-    concern and is explicitly documented.
+    Published versions are immutable database snapshots. Drafts are scoped to
+    one brand, and a new non-demo brand receives an empty starter pack rather
+    than another brand's synthetic facts or assets. Filesystem JSON is a
+    compatibility mirror; private binaries remain in the configured storage
+    adapter.
     """
 
     DEFAULT_BRAND_ID = "brand_orbita_demo"
 
-    def __init__(self, seed_root: Path, root: Path):
+    def __init__(self, seed_root: Path, root: Path, session_factory=None):
         self.seed_root = Path(seed_root)
         self.root = Path(root)
+        self.session_factory = session_factory
         self._lock = threading.RLock()
+
+    @contextmanager
+    def _database(self, tenant_id: str, brand_id: str):
+        """Open a tenant+brand-scoped transaction when database persistence is enabled."""
+        if self.session_factory is None:
+            yield None
+            return
+        session = self.session_factory()
+        try:
+            set_database_scope(session, tenant_id=tenant_id, brand_id=brand_id)
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @staticmethod
+    def _datetime_value(value: str | None) -> datetime:
+        if value:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    return parsed.replace(tzinfo=timezone.utc)
+                return parsed
+            except (TypeError, ValueError):
+                pass
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _as_iso(value: datetime | None) -> str | None:
+        return value.isoformat() if value else None
+
+    def _draft_dict(self, row: models.BrandKnowledgePackDraft) -> dict[str, Any]:
+        return {
+            "draft_id": row.draft_id,
+            "brand_id": row.brand_id,
+            "pack_id": row.pack_id,
+            "base_version_id": row.base_version_id,
+            "base_fingerprint": row.base_fingerprint,
+            "status": row.status,
+            "created_at": self._as_iso(row.created_at),
+            "created_by": row.created_by,
+            "updated_at": self._as_iso(row.updated_at),
+            "updated_by": row.updated_by,
+            "snapshot": deepcopy(row.snapshot),
+            "validation": deepcopy(row.validation),
+            "published_version_id": row.published_version_id,
+            "published_fingerprint": row.published_fingerprint,
+            "revision": row.revision,
+        }
+
+    def _version_dict(self, row: models.BrandKnowledgePackVersion, is_active: bool = False) -> dict[str, Any]:
+        return {
+            "version_id": row.version_id,
+            "pack_id": row.pack_id,
+            "brand_id": row.brand_id,
+            "pack_version": row.pack_version,
+            "fingerprint": row.fingerprint,
+            "status": row.status,
+            "created_at": self._as_iso(row.created_at),
+            "created_by": row.created_by,
+            "base_version_id": row.base_version_id,
+            "is_active": is_active,
+        }
+
+    def _catalog_active(self, tenant_id: str, brand_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        if self.session_factory is None:
+            return None
+        with self._database(tenant_id, brand_id) as db:
+            head = db.scalar(select(models.BrandKnowledgePackHead).where(
+                models.BrandKnowledgePackHead.tenant_id == tenant_id,
+                models.BrandKnowledgePackHead.brand_id == brand_id,
+            ))
+            if head is None:
+                return None
+            version = db.scalar(select(models.BrandKnowledgePackVersion).where(
+                models.BrandKnowledgePackVersion.tenant_id == tenant_id,
+                models.BrandKnowledgePackVersion.brand_id == brand_id,
+                models.BrandKnowledgePackVersion.version_id == head.active_version_id,
+            ))
+            if version is None:
+                raise RuntimeError("The database Knowledge Pack head references a missing immutable version")
+            return (
+                {
+                    "id": head.id,
+                    "tenant_id": head.tenant_id,
+                    "brand_id": head.brand_id,
+                    "pack_id": head.pack_id,
+                    "active_version_id": head.active_version_id,
+                    "active_fingerprint": head.active_fingerprint,
+                    "revision": head.revision,
+                },
+                {
+                    **self._version_dict(version, is_active=True),
+                    "snapshot": deepcopy(version.snapshot),
+                },
+            )
+
+    def _catalog_register_from_filesystem(
+        self, tenant_id: str, brand_id: str, version_root: Path
+    ) -> None:
+        """Import the complete existing filesystem version history into the DB."""
+        if self.session_factory is None:
+            return
+        pack_root = version_root.parent.parent
+        pointer_path = pack_root / "active.json"
+        active_pointer = self._read_json(pointer_path) if pointer_path.exists() else {}
+        active_version_id = str(active_pointer.get("version_id") or version_root.name)
+        imported_versions: list[dict[str, Any]] = []
+        active_metadata: dict[str, Any] | None = None
+
+        versions_root = pack_root / "versions"
+        for candidate_root in sorted(versions_root.iterdir(), key=lambda item: item.name):
+            if not candidate_root.is_dir() or not (candidate_root / "version.json").is_file():
+                continue
+            metadata = self._read_json(candidate_root / "version.json")
+            version_id = str(metadata.get("version_id") or candidate_root.name)
+            if version_id != candidate_root.name:
+                raise RuntimeError("Legacy Knowledge Pack version folder and metadata ID do not match")
+            if str(metadata.get("brand_id") or brand_id) != brand_id:
+                raise RuntimeError("Legacy Knowledge Pack version belongs to a different brand scope")
+            snapshot = BrandPack(root=candidate_root).snapshot()
+            expected_fingerprint = str(metadata.get("fingerprint", ""))
+            if expected_fingerprint and _canonical_hash(snapshot) != expected_fingerprint:
+                raise RuntimeError(
+                    f"Legacy filesystem Knowledge Pack {version_id} fingerprint does not match its snapshot; refusing to import it"
+                )
+            pack_id = str(metadata.get("pack_id") or self._pack_id(brand_id))
+            if imported_versions and pack_id != imported_versions[0]["pack_id"]:
+                raise RuntimeError("Legacy Knowledge Pack history contains inconsistent pack IDs")
+            row = {
+                "version_id": version_id,
+                "pack_id": pack_id,
+                "pack_version": str(metadata.get("pack_version", "1.0.0")),
+                "fingerprint": expected_fingerprint or _canonical_hash(snapshot),
+                "base_version_id": metadata.get("base_version_id"),
+                "snapshot": snapshot,
+                "created_by": str(metadata.get("created_by", "system-migration")),
+                "created_at": self._datetime_value(metadata.get("created_at")),
+            }
+            imported_versions.append(row)
+            if version_id == active_version_id:
+                active_metadata = row
+
+        if not imported_versions or active_metadata is None:
+            raise RuntimeError("Legacy active Knowledge Pack version is missing from its version history")
+        pointer_fingerprint = str(active_pointer.get("fingerprint") or active_metadata["fingerprint"])
+        if pointer_fingerprint != active_metadata["fingerprint"]:
+            raise RuntimeError("Legacy active Knowledge Pack pointer fingerprint does not match its version")
+
+        try:
+            with self._database(tenant_id, brand_id) as db:
+                existing = db.scalar(select(models.BrandKnowledgePackHead).where(
+                    models.BrandKnowledgePackHead.tenant_id == tenant_id,
+                    models.BrandKnowledgePackHead.brand_id == brand_id,
+                ))
+                if existing is not None:
+                    return
+                for item in imported_versions:
+                    db.add(models.BrandKnowledgePackVersion(
+                        tenant_id=tenant_id,
+                        brand_id=brand_id,
+                        pack_id=item["pack_id"],
+                        version_id=item["version_id"],
+                        pack_version=item["pack_version"],
+                        fingerprint=item["fingerprint"],
+                        status="PUBLISHED",
+                        base_version_id=item["base_version_id"],
+                        snapshot=item["snapshot"],
+                        created_by=item["created_by"],
+                        created_at=item["created_at"],
+                    ))
+                head = models.BrandKnowledgePackHead(
+                    tenant_id=tenant_id,
+                    brand_id=brand_id,
+                    pack_id=active_metadata["pack_id"],
+                    active_version_id=active_version_id,
+                    active_fingerprint=active_metadata["fingerprint"],
+                    revision=1,
+                )
+                db.add(head)
+        except IntegrityError:
+            # Another process initialised this exact scope first. Its database
+            # pointer is authoritative; the caller will re-read it below.
+            return
+
+    def _catalog_import_filesystem_drafts(self, tenant_id: str, brand_id: str) -> None:
+        """Import Build 012 filesystem drafts once, preserving un-published work."""
+        if self.session_factory is None:
+            return
+        drafts_root = self._brand_root(tenant_id, brand_id) / "drafts"
+        if not drafts_root.exists():
+            return
+        for path in sorted(drafts_root.glob("*.json")):
+            try:
+                payload = self._read_json(path)
+                draft_id = str(payload.get("draft_id", ""))
+                snapshot = payload.get("snapshot")
+                if (
+                    not draft_id
+                    or path.stem != draft_id
+                    or not isinstance(snapshot, dict)
+                    or payload.get("brand_id", self.DEFAULT_BRAND_ID) != brand_id
+                    or not payload.get("base_version_id")
+                    or not payload.get("base_fingerprint")
+                ):
+                    continue
+                with self._database(tenant_id, brand_id) as db:
+                    exists = db.scalar(select(models.BrandKnowledgePackDraft.draft_id).where(
+                        models.BrandKnowledgePackDraft.tenant_id == tenant_id,
+                        models.BrandKnowledgePackDraft.brand_id == brand_id,
+                        models.BrandKnowledgePackDraft.draft_id == draft_id,
+                    ))
+                    if exists is not None:
+                        continue
+                    created_at = self._datetime_value(payload.get("created_at"))
+                    updated_at = self._datetime_value(payload.get("updated_at"))
+                    db.add(models.BrandKnowledgePackDraft(
+                        draft_id=draft_id,
+                        tenant_id=tenant_id,
+                        brand_id=brand_id,
+                        pack_id=str(payload.get("pack_id") or self._pack_id(brand_id)),
+                        base_version_id=str(payload["base_version_id"]),
+                        base_fingerprint=str(payload["base_fingerprint"]),
+                        status=str(payload.get("status", "DRAFT")),
+                        snapshot=deepcopy(snapshot),
+                        validation=deepcopy(payload.get("validation")),
+                        revision=max(1, int(payload.get("revision", 1))),
+                        published_version_id=payload.get("published_version_id"),
+                        published_fingerprint=payload.get("published_fingerprint"),
+                        created_at=created_at,
+                        created_by=str(payload.get("created_by") or "legacy-build-012"),
+                        updated_at=updated_at,
+                        updated_by=str(payload.get("updated_by") or payload.get("created_by") or "legacy-build-012"),
+                    ))
+            except IntegrityError:
+                # A concurrent API instance may have imported the same draft.
+                continue
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                # A malformed legacy file is not imported as authoritative state.
+                # Keep the original file untouched for manual recovery.
+                continue
+
+    def _persist_draft(
+        self,
+        tenant_id: str,
+        brand_id: str,
+        draft: dict[str, Any],
+        decision: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if self.session_factory is None:
+            _write_json_atomic(self._draft_path(tenant_id, draft["draft_id"], brand_id), draft)
+            return draft
+        with self._database(tenant_id, brand_id) as db:
+            row = db.scalar(select(models.BrandKnowledgePackDraft).where(
+                models.BrandKnowledgePackDraft.tenant_id == tenant_id,
+                models.BrandKnowledgePackDraft.brand_id == brand_id,
+                models.BrandKnowledgePackDraft.draft_id == draft["draft_id"],
+            ).with_for_update())
+            if row is None:
+                raise FileNotFoundError("Draft Knowledge Pack not found")
+            expected_revision = int(draft.get("revision", row.revision))
+            updated_at = self._datetime_value(draft.get("updated_at"))
+            updated_by = str(draft.get("updated_by") or row.updated_by)
+
+            # Revision is part of the UPDATE predicate as well as the row lock.
+            # The compare-and-swap protects SQLite/local multi-process writes too,
+            # where SELECT FOR UPDATE is not available.
+            changed = db.execute(update(models.BrandKnowledgePackDraft).where(
+                models.BrandKnowledgePackDraft.tenant_id == tenant_id,
+                models.BrandKnowledgePackDraft.brand_id == brand_id,
+                models.BrandKnowledgePackDraft.draft_id == draft["draft_id"],
+                models.BrandKnowledgePackDraft.revision == expected_revision,
+            ).values(
+                snapshot=deepcopy(draft["snapshot"]),
+                status=str(draft["status"]),
+                validation=deepcopy(draft.get("validation")),
+                updated_at=updated_at,
+                updated_by=updated_by,
+                published_version_id=draft.get("published_version_id"),
+                published_fingerprint=draft.get("published_fingerprint"),
+                revision=expected_revision + 1,
+            ), execution_options={"synchronize_session": False})
+            if changed.rowcount != 1:
+                raise ValueError("This draft changed in another session. Reload it before making another edit.")
+
+            if decision:
+                db.add(models.BrandKnowledgePackDecision(
+                    tenant_id=tenant_id,
+                    brand_id=brand_id,
+                    draft_id=draft["draft_id"],
+                    record_type=decision["record_type"],
+                    record_id=decision["record_id"],
+                    decision_status=decision["status"],
+                    reason=decision["reason"],
+                    actor_id=decision["actor_id"],
+                    created_at=self._datetime_value(decision.get("created_at")),
+                ))
+
+            db.flush()
+            db.refresh(row)
+            result = self._draft_dict(row)
+        try:
+            _write_json_atomic(self._draft_path(tenant_id, draft["draft_id"], brand_id), result)
+        except OSError:
+            # The committed database state is authoritative; a failed local
+            # compatibility mirror must not turn a successful write into a
+            # misleading API failure. The next access can repair the mirror.
+            pass
+        return result
 
     def _tenant_root(self, tenant_id: str) -> Path:
         return self.root / _safe_component(tenant_id)
@@ -93,7 +413,7 @@ class KnowledgePackStore:
     def _read_json(self, path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def _write_snapshot(self, destination: Path, snapshot: dict[str, Any], copy_assets_from: Path | None = None) -> None:
+    def _write_snapshot(self, destination: Path, snapshot: dict[str, Any], copy_assets_from: Path | None = None, copy_seed_assets: bool = True) -> None:
         destination.mkdir(parents=True, exist_ok=True)
         for section, filename in SECTION_FILES.items():
             if section not in snapshot:
@@ -104,8 +424,8 @@ class KnowledgePackStore:
             elif section == "policies":
                 value = {"schema_version": "1.0.0", "policies": value}
             _write_json_atomic(destination / filename, value)
-        asset_source = copy_assets_from / "assets" if copy_assets_from else self.seed_root / "assets"
-        if asset_source.exists():
+        asset_source = copy_assets_from / "assets" if copy_assets_from else (self.seed_root / "assets" if copy_seed_assets else None)
+        if asset_source is not None and asset_source.exists():
             target_assets = destination / "assets"
             if target_assets.exists():
                 shutil.rmtree(target_assets)
@@ -172,18 +492,59 @@ class KnowledgePackStore:
     def ensure_initialized(
         self, tenant_id: str, brand_id: str | None = None, brand_name: str | None = None
     ) -> Path:
-        """Ensure a distinct pack exists for the selected tenant/brand context."""
+        """Ensure a distinct pack exists and its active pointer is database-backed when configured."""
+        seed_pack = BrandPack(root=self.seed_root)
+        brand_id = brand_id or str(seed_pack.brand.get("brand_id", self.DEFAULT_BRAND_ID))
+        brand_id = _safe_component(brand_id)
+        pack_id = self._pack_id(brand_id)
+
+        # Database catalogue is authoritative. The local JSON pointer is retained
+        # as a compatibility/export mirror, not as a concurrency authority.
+        catalog = self._catalog_active(tenant_id, brand_id)
+        if catalog is not None:
+            head, version = catalog
+            pack_root = self._pack_root(tenant_id, brand_id, head["pack_id"])
+            version_root = pack_root / "versions" / _safe_component(version["version_id"])
+            if not (version_root / "version.json").exists() or not (version_root / "brand.json").exists():
+                try:
+                    self._write_snapshot(
+                        version_root,
+                        version["snapshot"],
+                        copy_assets_from=None,
+                        copy_seed_assets=(brand_id == self.DEFAULT_BRAND_ID),
+                    )
+                    metadata = {key: value for key, value in version.items() if key != "snapshot"}
+                    metadata["pack_id"] = head["pack_id"]
+                    _write_json_atomic(version_root / "version.json", metadata)
+                except OSError:
+                    # Reading the authoritative DB snapshot remains possible
+                    # even when local mirror repair is temporarily unavailable.
+                    pass
+            try:
+                _write_json_atomic(pack_root / "active.json", {
+                    "version_id": head["active_version_id"],
+                    "fingerprint": head["active_fingerprint"],
+                    "activated_at": _now(),
+                })
+            except OSError:
+                # The DB pointer remains authoritative if its local mirror is
+                # unavailable; active_root() reads the DB directly.
+                pass
+            self._catalog_import_filesystem_drafts(tenant_id, brand_id)
+            return version_root
+
         with self._lock:
-            seed_pack = BrandPack(root=self.seed_root)
-            brand_id = brand_id or str(seed_pack.brand.get("brand_id", self.DEFAULT_BRAND_ID))
-            brand_id = _safe_component(brand_id)
-            pack_id = self._pack_id(brand_id)
             pack_root = self._pack_root(tenant_id, brand_id, pack_id)
             active_pointer = pack_root / "active.json"
             if active_pointer.exists():
                 pointer = self._read_json(active_pointer)
                 active_root = pack_root / "versions" / _safe_component(pointer["version_id"])
                 if active_root.exists():
+                    self._catalog_register_from_filesystem(tenant_id, brand_id, active_root)
+                    catalog = self._catalog_active(tenant_id, brand_id)
+                    if catalog is not None:
+                        self._catalog_import_filesystem_drafts(tenant_id, brand_id)
+                        return pack_root / "versions" / catalog[1]["version_id"]
                     return active_root
                 raise RuntimeError("Active Brand Knowledge Pack pointer references a missing version")
 
@@ -204,6 +565,11 @@ class KnowledgePackStore:
                 pointer = self._read_json(pack_root / "active.json")
                 active_root = pack_root / "versions" / _safe_component(pointer["version_id"])
                 if active_root.exists():
+                    self._catalog_register_from_filesystem(tenant_id, brand_id, active_root)
+                    catalog = self._catalog_active(tenant_id, brand_id)
+                    if catalog is not None:
+                        self._catalog_import_filesystem_drafts(tenant_id, brand_id)
+                        return pack_root / "versions" / catalog[1]["version_id"]
                     return active_root
                 raise RuntimeError("Migrated active Brand Knowledge Pack pointer references a missing version")
 
@@ -244,21 +610,44 @@ class KnowledgePackStore:
                 "fingerprint": fingerprint,
                 "activated_at": _now(),
             })
+            self._catalog_register_from_filesystem(tenant_id, brand_id, version_root)
+            catalog = self._catalog_active(tenant_id, brand_id)
+            if catalog is not None:
+                self._catalog_import_filesystem_drafts(tenant_id, brand_id)
+                return pack_root / "versions" / catalog[1]["version_id"]
             return version_root
 
     def active_root(self, tenant_id: str, brand_id: str | None = None, brand_name: str | None = None) -> Path:
         seed_pack = BrandPack(root=self.seed_root)
         brand_id = brand_id or str(seed_pack.brand.get("brand_id", self.DEFAULT_BRAND_ID))
-        pack_root = self._pack_root(tenant_id, brand_id)
         self.ensure_initialized(tenant_id, brand_id, brand_name)
+        if self.session_factory is not None:
+            catalog = self._catalog_active(tenant_id, brand_id)
+            if catalog is None:
+                raise RuntimeError("Database Knowledge Pack catalogue was not initialised")
+            head, version = catalog
+            return self._pack_root(tenant_id, brand_id, head["pack_id"]) / "versions" / _safe_component(version["version_id"])
+        pack_root = self._pack_root(tenant_id, brand_id)
         pointer = self._read_json(pack_root / "active.json")
         return pack_root / "versions" / _safe_component(pointer["version_id"])
 
     def active_pack(self, tenant_id: str, brand_id: str | None = None, brand_name: str | None = None) -> BrandPack:
-        return BrandPack(root=self.active_root(tenant_id, brand_id, brand_name))
+        root = self.active_root(tenant_id, brand_id, brand_name)
+        if self.session_factory is not None:
+            resolved_brand_id = brand_id or self.DEFAULT_BRAND_ID
+            catalog = self._catalog_active(tenant_id, resolved_brand_id)
+            if catalog is None:
+                raise RuntimeError("Database Knowledge Pack catalogue was not initialised")
+            return BrandPack.from_snapshot(catalog[1]["snapshot"])
+        return BrandPack(root=root)
 
     def active_metadata(self, tenant_id: str, brand_id: str | None = None, brand_name: str | None = None) -> dict[str, Any]:
         root = self.active_root(tenant_id, brand_id, brand_name)
+        if self.session_factory is not None:
+            catalog = self._catalog_active(tenant_id, brand_id or self.DEFAULT_BRAND_ID)
+            if catalog is None:
+                raise RuntimeError("Database Knowledge Pack catalogue was not initialised")
+            return {key: value for key, value in catalog[1].items() if key != "snapshot"}
         metadata = self._read_json(root / "version.json")
         pointer = self._read_json(root.parent.parent / "active.json")
         metadata["is_active"] = True
@@ -267,6 +656,13 @@ class KnowledgePackStore:
 
     def list_versions(self, tenant_id: str, brand_id: str | None = None, brand_name: str | None = None) -> list[dict[str, Any]]:
         active = self.active_metadata(tenant_id, brand_id, brand_name)
+        if self.session_factory is not None:
+            with self._database(tenant_id, brand_id or self.DEFAULT_BRAND_ID) as db:
+                rows = db.scalars(select(models.BrandKnowledgePackVersion).where(
+                    models.BrandKnowledgePackVersion.tenant_id == tenant_id,
+                    models.BrandKnowledgePackVersion.brand_id == (brand_id or self.DEFAULT_BRAND_ID),
+                ).order_by(models.BrandKnowledgePackVersion.created_at.desc())).all()
+                return [self._version_dict(row, row.version_id == active.get("version_id")) for row in rows]
         versions_root = self.active_root(tenant_id, brand_id, brand_name).parent
         rows: list[dict[str, Any]] = []
         for version_dir in versions_root.iterdir():
@@ -277,14 +673,227 @@ class KnowledgePackStore:
                 rows.append(row)
         return sorted(rows, key=lambda item: item.get("created_at", ""), reverse=True)
 
+    def _version_snapshot(
+        self, tenant_id: str, brand_id: str, version_id: str, brand_name: str | None = None
+    ) -> dict[str, Any]:
+        version_id = _safe_component(version_id)
+        if self.session_factory is not None:
+            with self._database(tenant_id, brand_id) as db:
+                row = db.scalar(select(models.BrandKnowledgePackVersion).where(
+                    models.BrandKnowledgePackVersion.tenant_id == tenant_id,
+                    models.BrandKnowledgePackVersion.brand_id == brand_id,
+                    models.BrandKnowledgePackVersion.version_id == version_id,
+                ))
+                if row is None:
+                    raise FileNotFoundError("Knowledge Pack version not found")
+                return deepcopy(row.snapshot)
+        versions_root = self.active_root(tenant_id, brand_id, brand_name).parent
+        version_root = versions_root / version_id
+        if not version_root.is_dir():
+            raise FileNotFoundError("Knowledge Pack version not found")
+        return BrandPack(root=version_root).snapshot()
+
+    @staticmethod
+    def _diff_value(value: Any, field_name: str | None = None) -> str:
+        """Bound values and redact private object-store identifiers in version diffs."""
+        sensitive_names = {"storage_key", "extraction_key", "object_key", "s3_key", "bucket_key"}
+        if field_name and field_name.lower() in sensitive_names:
+            return "[redacted private storage reference]"
+
+        def redact_nested(item: Any) -> Any:
+            if isinstance(item, dict):
+                return {
+                    key: ("[redacted private storage reference]" if str(key).lower() in sensitive_names else redact_nested(val))
+                    for key, val in item.items()
+                }
+            if isinstance(item, list):
+                return [redact_nested(value) for value in item]
+            return item
+
+        safe_value = redact_nested(value)
+        rendered = safe_value if isinstance(safe_value, str) else json.dumps(safe_value, ensure_ascii=False, sort_keys=True)
+        return rendered if len(rendered) <= 500 else rendered[:497] + "..."
+
+    @staticmethod
+    def _diff_record(record: dict[str, Any]) -> dict[str, Any]:
+        sensitive_names = {"storage_key", "extraction_key", "object_key", "s3_key", "bucket_key"}
+        def redact(item: Any, parent_key: str | None = None) -> Any:
+            if parent_key and parent_key.lower() in sensitive_names:
+                return "[redacted private storage reference]"
+            if isinstance(item, dict):
+                return {
+                    key: redact(value, str(key))
+                    for key, value in item.items()
+                }
+            if isinstance(item, list):
+                return [redact(value) for value in item]
+            if parent_key == "reference_text" and isinstance(item, str) and len(item) > 500:
+                return item[:497] + "..."
+            return item
+        return redact(record)
+
+    def compare_versions(
+        self, tenant_id: str, brand_id: str, from_version_id: str, to_version_id: str,
+        brand_name: str | None = None, max_changes: int = 250,
+    ) -> dict[str, Any]:
+        """Return a bounded record-level diff between two immutable versions in one brand."""
+        if from_version_id == to_version_id:
+            raise ValueError("Choose two different Knowledge Pack versions to compare")
+        left = self._version_snapshot(tenant_id, brand_id, from_version_id, brand_name)
+        right = self._version_snapshot(tenant_id, brand_id, to_version_id, brand_name)
+        descriptors = {
+            "brand": (None, None),
+            "facts": ("facts", "fact_id"),
+            "policies": ("policies", "policy_id"),
+            "terminology": ("terminology", "term_id"),
+            "voice": ("voice", None),
+            "assets": ("assets", "asset_id"),
+            "sources": ("sources", "source_id"),
+        }
+
+        def records(section: str, snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
+            value = snapshot.get(section)
+            if section == "brand":
+                return {"brand": value} if isinstance(value, dict) else {}
+            if section in {"facts", "policies"}:
+                items = value if isinstance(value, list) else []
+            elif section == "sources":
+                items = value.get("sources", []) if isinstance(value, dict) else []
+            elif section == "assets":
+                items = value.get("approved_assets", []) if isinstance(value, dict) else []
+            elif section == "terminology":
+                items = []
+                if isinstance(value, dict):
+                    items = list(value.get("preferred_terms", [])) + list(value.get("prohibited_or_review_terms", []))
+            elif section == "voice":
+                return {"voice": value} if isinstance(value, dict) else {}
+            else:
+                items = []
+            identifier = descriptors[section][1]
+            result: dict[str, dict[str, Any]] = {}
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get(identifier) or f"index-{index}") if identifier else f"index-{index}"
+                result[key] = item
+            return result
+
+        changes: list[dict[str, Any]] = []
+        for section in descriptors:
+            before_records = records(section, left)
+            after_records = records(section, right)
+            for record_id in sorted(set(before_records) | set(after_records)):
+                before = before_records.get(record_id)
+                after = after_records.get(record_id)
+                if before is None:
+                    changes.append({"section": section, "record_id": record_id, "change": "ADDED", "fields": [], "after": self._diff_record(after)})
+                elif after is None:
+                    changes.append({"section": section, "record_id": record_id, "change": "REMOVED", "fields": [], "before": self._diff_record(before)})
+                else:
+                    fields = []
+                    for field in sorted(set(before) | set(after)):
+                        if before.get(field) != after.get(field):
+                            fields.append({
+                                "field": field,
+                                "before": self._diff_value(before.get(field), field),
+                                "after": self._diff_value(after.get(field), field),
+                            })
+                    if fields:
+                        changes.append({"section": section, "record_id": record_id, "change": "CHANGED", "fields": fields})
+                if len(changes) > max_changes:
+                    break
+            if len(changes) > max_changes:
+                break
+        return {
+            "from_version_id": from_version_id,
+            "to_version_id": to_version_id,
+            "change_count": len(changes),
+            "changes": changes[:max_changes],
+            "truncated": len(changes) > max_changes,
+        }
+
     def _draft_path(self, tenant_id: str, draft_id: str, brand_id: str | None = None) -> Path:
         if brand_id is None:
             brand_id = self.DEFAULT_BRAND_ID
         return self._brand_root(tenant_id, brand_id) / "drafts" / f"{_safe_component(draft_id)}.json"
 
+    def _create_draft_database(
+        self, tenant_id: str, actor_id: str, brand_id: str, brand_name: str | None
+    ) -> dict[str, Any]:
+        self.ensure_initialized(tenant_id, brand_id, brand_name)
+        with self._database(tenant_id, brand_id) as db:
+            head = db.scalar(select(models.BrandKnowledgePackHead).where(
+                models.BrandKnowledgePackHead.tenant_id == tenant_id,
+                models.BrandKnowledgePackHead.brand_id == brand_id,
+            ).with_for_update())
+            if head is None:
+                raise RuntimeError("Knowledge Pack catalogue has not been initialised")
+            active_version = db.scalar(select(models.BrandKnowledgePackVersion).where(
+                models.BrandKnowledgePackVersion.tenant_id == tenant_id,
+                models.BrandKnowledgePackVersion.brand_id == brand_id,
+                models.BrandKnowledgePackVersion.version_id == head.active_version_id,
+            ))
+            if active_version is None:
+                raise RuntimeError("Active Knowledge Pack version is missing")
+            snapshot = deepcopy(active_version.snapshot)
+            if "sources" not in snapshot:
+                snapshot["sources"] = self._seed_source_registry(snapshot)
+            for record in snapshot.get("facts", []):
+                if isinstance(record, dict) and record.get("status") == "approved":
+                    record.setdefault("owner_id", snapshot.get("brand", {}).get("owner_id", "legacy-seed"))
+                    record.setdefault("approved_by", "legacy-seed")
+                    record.setdefault("approved_at", _now())
+            for record in snapshot.get("policies", []):
+                if isinstance(record, dict) and record.get("status") == "approved":
+                    record.setdefault("approved_by", record.get("owner_id") or "legacy-seed")
+                    record.setdefault("approved_at", _now())
+            for record in (snapshot.get("assets", {}) or {}).get("approved_assets", []):
+                if isinstance(record, dict) and record.get("status") == "approved":
+                    record.setdefault("owner_id", snapshot.get("brand", {}).get("owner_id", "legacy-seed"))
+                    record.setdefault("approved_by", "legacy-seed")
+                    record.setdefault("approved_at", _now())
+            for key in ("preferred_terms", "prohibited_or_review_terms"):
+                for record in (snapshot.get("terminology", {}) or {}).get(key, []):
+                    if isinstance(record, dict):
+                        record.setdefault("status", "approved")
+                        if record.get("status") == "approved":
+                            record.setdefault("owner_id", snapshot.get("brand", {}).get("owner_id", "legacy-seed"))
+                            record.setdefault("approved_by", "legacy-seed")
+                            record.setdefault("approved_at", _now())
+            now = datetime.now(timezone.utc)
+            draft_id = str(uuid4())
+            draft_row = models.BrandKnowledgePackDraft(
+                draft_id=draft_id,
+                tenant_id=tenant_id,
+                brand_id=brand_id,
+                pack_id=head.pack_id,
+                base_version_id=head.active_version_id,
+                base_fingerprint=head.active_fingerprint,
+                status="DRAFT",
+                snapshot=snapshot,
+                validation=None,
+                revision=1,
+                created_at=now,
+                created_by=actor_id,
+                updated_at=now,
+                updated_by=actor_id,
+            )
+            db.add(draft_row)
+            db.flush()
+            draft = self._draft_dict(draft_row)
+        try:
+            _write_json_atomic(self._draft_path(tenant_id, draft_id, brand_id), draft)
+        except OSError:
+            # Database commit succeeded; filesystem JSON is only a mirror.
+            pass
+        return draft
+
     def create_draft(
         self, tenant_id: str, actor_id: str, brand_id: str | None = None, brand_name: str | None = None
     ) -> dict[str, Any]:
+        resolved_brand_id = brand_id or self.DEFAULT_BRAND_ID
+        if self.session_factory is not None:
+            return self._create_draft_database(tenant_id, actor_id, resolved_brand_id, brand_name)
         with self._lock:
             active_root = self.active_root(tenant_id, brand_id, brand_name)
             active_meta = self._read_json(active_root / "version.json")
@@ -334,6 +943,17 @@ class KnowledgePackStore:
             return draft
 
     def get_draft(self, tenant_id: str, draft_id: str, brand_id: str | None = None) -> dict[str, Any]:
+        resolved_brand_id = brand_id or self.DEFAULT_BRAND_ID
+        if self.session_factory is not None:
+            with self._database(tenant_id, resolved_brand_id) as db:
+                row = db.scalar(select(models.BrandKnowledgePackDraft).where(
+                    models.BrandKnowledgePackDraft.tenant_id == tenant_id,
+                    models.BrandKnowledgePackDraft.brand_id == resolved_brand_id,
+                    models.BrandKnowledgePackDraft.draft_id == draft_id,
+                ))
+                if row is None:
+                    raise FileNotFoundError("Draft Knowledge Pack not found")
+                return self._draft_dict(row)
         path = self._draft_path(tenant_id, draft_id, brand_id)
         if not path.exists() and (brand_id is None or brand_id == self.DEFAULT_BRAND_ID):
             legacy_path = self._tenant_root(tenant_id) / "drafts" / f"{_safe_component(draft_id)}.json"
@@ -346,17 +966,164 @@ class KnowledgePackStore:
             raise FileNotFoundError("Draft Knowledge Pack not found")
         return draft
 
+    def list_decisions(
+        self, tenant_id: str, draft_id: str, brand_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return append-only record decisions for a scoped Knowledge Pack draft."""
+        resolved_brand_id = brand_id or self.DEFAULT_BRAND_ID
+        if self.session_factory is None:
+            return []
+        with self._database(tenant_id, resolved_brand_id) as db:
+            draft_exists = db.scalar(select(models.BrandKnowledgePackDraft.draft_id).where(
+                models.BrandKnowledgePackDraft.tenant_id == tenant_id,
+                models.BrandKnowledgePackDraft.brand_id == resolved_brand_id,
+                models.BrandKnowledgePackDraft.draft_id == draft_id,
+            ))
+            if draft_exists is None:
+                raise FileNotFoundError("Draft Knowledge Pack not found")
+            rows = db.scalars(select(models.BrandKnowledgePackDecision).where(
+                models.BrandKnowledgePackDecision.tenant_id == tenant_id,
+                models.BrandKnowledgePackDecision.brand_id == resolved_brand_id,
+                models.BrandKnowledgePackDecision.draft_id == draft_id,
+            ).order_by(models.BrandKnowledgePackDecision.created_at.asc(), models.BrandKnowledgePackDecision.id.asc())).all()
+            return [{
+                "id": row.id,
+                "draft_id": row.draft_id,
+                "record_type": row.record_type,
+                "record_id": row.record_id,
+                "status": row.decision_status,
+                "reason": row.reason,
+                "actor_id": row.actor_id,
+                "created_at": self._as_iso(row.created_at),
+            } for row in rows]
+
+    @staticmethod
+    def _enforce_section_governance(section: str, current: Any, proposed: Any) -> None:
+        """Protect owner decisions and upload provenance from the generic JSON editor.
+
+        Editing an already-approved record automatically downgrades it to DRAFT;
+        the owner must explicitly approve it again through the decision endpoint.
+        New approvals and upload metadata can only be created by dedicated routes.
+        """
+        identity_fields = {
+            "facts": "fact_id", "policies": "policy_id", "sources": "source_id",
+            "assets": "asset_id", "terminology": "term_id",
+        }
+        protected = {"status", "approved_by", "approved_at", "decision_by", "decision_at", "decision_reason"}
+        upload_provenance = {
+            "sources": {"storage_key", "file_sha256", "mime_type", "size_bytes", "uploaded_by", "uploaded_at", "source_format",
+                        "original_filename", "extraction_key", "extraction_status", "extraction_warnings",
+                        "region_count", "reference_text", "sha256", "scan_status", "scan_engine",
+                        "scan_scanned_at", "scan_signature"},
+            "assets": {"storage_key", "sha256", "mime_type", "size_bytes", "width", "height", "uploaded_by",
+                       "uploaded_at", "original_filename", "scan_status", "scan_engine", "scan_scanned_at",
+                       "scan_signature"},
+        }.get(section, set())
+
+        def rows(value: Any) -> list[dict[str, Any]]:
+            if section in {"facts", "policies"}:
+                return value if isinstance(value, list) else []
+            if section == "sources":
+                return value.get("sources", []) if isinstance(value, dict) and isinstance(value.get("sources", []), list) else []
+            if section == "assets":
+                return value.get("approved_assets", []) if isinstance(value, dict) and isinstance(value.get("approved_assets", []), list) else []
+            if section == "terminology":
+                if not isinstance(value, dict):
+                    return []
+                return list(value.get("preferred_terms", [])) + list(value.get("prohibited_or_review_terms", []))
+            return []
+
+        id_field = identity_fields.get(section)
+        if not id_field:
+            return
+        previous = {
+            str(item.get(id_field)): item
+            for item in rows(current)
+            if isinstance(item, dict) and item.get(id_field) is not None
+        }
+        for index, item in enumerate(rows(proposed)):
+            if not isinstance(item, dict):
+                continue
+            record_id = str(item.get(id_field, f"new-{index}"))
+            old = previous.get(record_id)
+            if old is None:
+                if item.get("status") not in (None, "draft"):
+                    raise ValueError(f"{section} record {record_id}: new records must start as draft; use the owner decision workflow to approve")
+                if any(item.get(field) not in (None, "") for field in protected - {"status"}):
+                    raise ValueError(f"{section} record {record_id}: approval provenance is created only by the owner decision workflow")
+                if any(item.get(field) not in (None, "") for field in upload_provenance):
+                    raise ValueError(f"{section} record {record_id}: upload provenance is created only by dedicated upload routes")
+                continue
+
+            for field in protected:
+                if item.get(field) != old.get(field):
+                    raise ValueError(f"{section} record {record_id}: {field} is controlled by the explicit owner decision workflow")
+            for field in upload_provenance:
+                if item.get(field) != old.get(field):
+                    raise ValueError(f"{section} record {record_id}: {field} is immutable upload provenance")
+
+            if old.get("status") == "approved" and item != old:
+                item["status"] = "draft"
+                for field in ("approved_by", "approved_at", "decision_by", "decision_at", "decision_reason"):
+                    item.pop(field, None)
+
     def update_section(
         self, tenant_id: str, draft_id: str, section: str, content: Any, actor_id: str,
         brand_id: str | None = None,
     ) -> dict[str, Any]:
         if section not in SECTION_NAMES:
             raise ValueError(f"Unsupported Knowledge Pack section: {section}")
+        if self.session_factory is not None:
+            draft = self.get_draft(tenant_id, draft_id, brand_id)
+            if draft.get("status") == "PUBLISHED":
+                raise ValueError("Published Knowledge Pack versions are immutable")
+            self._enforce_section_governance(section, draft["snapshot"].get(section), content)
+            draft["snapshot"][section] = deepcopy(content)
+            draft["status"] = "DRAFT"
+            draft["validation"] = None
+            draft["updated_at"] = _now()
+            draft["updated_by"] = actor_id
+            return self._persist_draft(tenant_id, brand_id or self.DEFAULT_BRAND_ID, draft)
         with self._lock:
             draft = self.get_draft(tenant_id, draft_id, brand_id)
             if draft.get("status") == "PUBLISHED":
                 raise ValueError("Published Knowledge Pack versions are immutable")
+            self._enforce_section_governance(section, draft["snapshot"].get(section), content)
             draft["snapshot"][section] = content
+            draft["status"] = "DRAFT"
+            draft["validation"] = None
+            draft["updated_at"] = _now()
+            draft["updated_by"] = actor_id
+            _write_json_atomic(self._draft_path(tenant_id, draft_id, brand_id), draft)
+            return draft
+
+    def append_source(
+        self, tenant_id: str, brand_id: str, draft_id: str, source: dict[str, Any], actor_id: str
+    ) -> dict[str, Any]:
+        """Append a source created by a dedicated provenance-preserving intake route."""
+        if self.session_factory is not None:
+            draft = self.get_draft(tenant_id, draft_id, brand_id)
+            if draft.get("status") == "PUBLISHED":
+                raise ValueError("Published Knowledge Pack drafts are immutable")
+            registry = draft["snapshot"].setdefault("sources", {"schema_version": "1.0.0", "sources": []})
+            records = registry.setdefault("sources", [])
+            if any(item.get("source_id") == source.get("source_id") for item in records if isinstance(item, dict)):
+                raise ValueError("Source identifier already exists in this draft")
+            records.append(dict(source))
+            draft["status"] = "DRAFT"
+            draft["validation"] = None
+            draft["updated_at"] = _now()
+            draft["updated_by"] = actor_id
+            return self._persist_draft(tenant_id, brand_id, draft)
+        with self._lock:
+            draft = self.get_draft(tenant_id, draft_id, brand_id)
+            if draft.get("status") == "PUBLISHED":
+                raise ValueError("Published Knowledge Pack drafts are immutable")
+            registry = draft["snapshot"].setdefault("sources", {"schema_version": "1.0.0", "sources": []})
+            records = registry.setdefault("sources", [])
+            if any(item.get("source_id") == source.get("source_id") for item in records if isinstance(item, dict)):
+                raise ValueError("Source identifier already exists in this draft")
+            records.append(dict(source))
             draft["status"] = "DRAFT"
             draft["validation"] = None
             draft["updated_at"] = _now()
@@ -367,6 +1134,20 @@ class KnowledgePackStore:
     def append_asset(
         self, tenant_id: str, brand_id: str, draft_id: str, asset: dict[str, Any], actor_id: str
     ) -> dict[str, Any]:
+        if self.session_factory is not None:
+            draft = self.get_draft(tenant_id, draft_id, brand_id)
+            if draft.get("status") == "PUBLISHED":
+                raise ValueError("Published Knowledge Pack versions are immutable")
+            assets = draft["snapshot"].setdefault("assets", {"approved_assets": []})
+            records = assets.setdefault("approved_assets", [])
+            if any(item.get("asset_id") == asset.get("asset_id") for item in records if isinstance(item, dict)):
+                raise ValueError("Asset identifier already exists in this draft")
+            records.append(dict(asset))
+            draft["status"] = "DRAFT"
+            draft["validation"] = None
+            draft["updated_at"] = _now()
+            draft["updated_by"] = actor_id
+            return self._persist_draft(tenant_id, brand_id, draft)
         with self._lock:
             draft = self.get_draft(tenant_id, draft_id, brand_id)
             if draft.get("status") == "PUBLISHED":
@@ -383,6 +1164,50 @@ class KnowledgePackStore:
             _write_json_atomic(self._draft_path(tenant_id, draft_id, brand_id), draft)
             return draft
 
+    def update_scan_record(
+        self, tenant_id: str, brand_id: str, draft_id: str, record_type: str, record_id: str,
+        updates: dict[str, Any], actor_id: str,
+    ) -> dict[str, Any]:
+        """Update only machine-owned scan/extraction metadata after a rescan.
+
+        This is intentionally narrower than ``update_section``: callers cannot
+        change approval state, actor provenance, storage location or original hash.
+        """
+        allowed = {
+            "source": {"scan_status", "scan_engine", "scan_scanned_at", "scan_signature",
+                       "extraction_key", "extraction_status", "extraction_warnings",
+                       "region_count", "reference_text", "sha256"},
+            "asset": {"scan_status", "scan_engine", "scan_scanned_at", "scan_signature"},
+        }
+        if record_type not in allowed or set(updates) - allowed[record_type]:
+            raise ValueError("Unsupported security scan metadata update")
+        draft = self.get_draft(tenant_id, draft_id, brand_id)
+        if draft.get("status") == "PUBLISHED":
+            raise ValueError("Published Knowledge Pack drafts are immutable")
+        snapshot = draft.get("snapshot", {})
+        if record_type == "source":
+            records = (snapshot.get("sources", {}) or {}).get("sources", [])
+            id_field = "source_id"
+        else:
+            records = (snapshot.get("assets", {}) or {}).get("approved_assets", [])
+            id_field = "asset_id"
+        record = next((item for item in records if isinstance(item, dict) and str(item.get(id_field)) == record_id), None)
+        if record is None:
+            raise FileNotFoundError("Knowledge record not found")
+        record.update(deepcopy(updates))
+        if record.get("scan_status") != "CLEAN" and record.get("status") == "approved":
+            record["status"] = "draft"
+            record.pop("approved_by", None)
+            record.pop("approved_at", None)
+            record["decision_by"] = actor_id
+            record["decision_at"] = _now()
+            record["decision_reason"] = "Approval suspended because a new malware scan did not return CLEAN."
+        draft["status"] = "DRAFT"
+        draft["validation"] = None
+        draft["updated_at"] = _now()
+        draft["updated_by"] = actor_id
+        return self._persist_draft(tenant_id, brand_id, draft)
+
     def decide_record(
         self, tenant_id: str, brand_id: str, draft_id: str, record_type: str, record_id: str,
         status: str, actor_id: str, reason: str | None = None,
@@ -393,6 +1218,59 @@ class KnowledgePackStore:
             raise ValueError("Unsupported record type")
         section_map = {"fact": "facts", "policy": "policies", "source": "sources", "asset": "assets"}
         id_field = {"fact": "fact_id", "policy": "policy_id", "source": "source_id", "asset": "asset_id", "term": "term_id"}
+        if self.session_factory is not None:
+            draft = self.get_draft(tenant_id, draft_id, brand_id)
+            snapshot = draft.get("snapshot", {})
+            candidates: list[dict[str, Any]] = []
+            if record_type == "term":
+                terminology = snapshot.get("terminology", {})
+                candidates = list(terminology.get("preferred_terms", [])) + list(terminology.get("prohibited_or_review_terms", []))
+            elif record_type == "asset":
+                candidates = (snapshot.get("assets", {}) or {}).get("approved_assets", [])
+            elif record_type == "source":
+                candidates = (snapshot.get("sources", {}) or {}).get("sources", [])
+            else:
+                candidates = snapshot.get(section_map[record_type], [])
+            record = next((item for item in candidates if isinstance(item, dict) and str(item.get(id_field[record_type])) == record_id), None)
+            if record is None:
+                raise FileNotFoundError("Knowledge record not found")
+            if status == "approved" and record_type == "source" and record.get("storage_key"):
+                if record.get("scan_status") != "CLEAN":
+                    raise ValueError("SOURCE_MALWARE_SCAN_REQUIRED: the uploaded source must pass malware scanning before approval")
+                if record.get("extraction_status") != "COMPLETED" or not str(record.get("reference_text") or "").strip():
+                    raise ValueError("SOURCE_EXTRACTION_INCOMPLETE: the uploaded source needs complete, readable extracted text before approval")
+            if status == "approved" and record_type == "asset" and record.get("storage_key"):
+                if record.get("scan_status") != "CLEAN":
+                    raise ValueError("ASSET_MALWARE_SCAN_REQUIRED: the uploaded asset must pass malware scanning before approval")
+            record["status"] = status
+            record["owner_id"] = record.get("owner_id") or actor_id
+            record["decision_by"] = actor_id
+            record["decision_at"] = _now()
+            clean_reason = (reason or "").strip()
+            record["decision_reason"] = clean_reason or None
+            if status == "approved":
+                record["approved_by"] = actor_id
+                record["approved_at"] = _now()
+            else:
+                record.pop("approved_by", None)
+                record.pop("approved_at", None)
+            draft["status"] = "DRAFT"
+            draft["validation"] = None
+            draft["updated_at"] = _now()
+            draft["updated_by"] = actor_id
+            return self._persist_draft(
+                tenant_id,
+                brand_id,
+                draft,
+                decision={
+                    "record_type": record_type,
+                    "record_id": record_id,
+                    "status": status,
+                    "reason": clean_reason or "No reason supplied",
+                    "actor_id": actor_id,
+                    "created_at": _now(),
+                },
+            )
         with self._lock:
             draft = self.get_draft(tenant_id, draft_id, brand_id)
             snapshot = draft.get("snapshot", {})
@@ -409,6 +1287,14 @@ class KnowledgePackStore:
             record = next((item for item in candidates if isinstance(item, dict) and str(item.get(id_field[record_type])) == record_id), None)
             if record is None:
                 raise FileNotFoundError("Knowledge record not found")
+            if status == "approved" and record_type == "source" and record.get("storage_key"):
+                if record.get("scan_status") != "CLEAN":
+                    raise ValueError("SOURCE_MALWARE_SCAN_REQUIRED: the uploaded source must pass malware scanning before approval")
+                if record.get("extraction_status") != "COMPLETED" or not str(record.get("reference_text") or "").strip():
+                    raise ValueError("SOURCE_EXTRACTION_INCOMPLETE: the uploaded source needs complete, readable extracted text before approval")
+            if status == "approved" and record_type == "asset" and record.get("storage_key"):
+                if record.get("scan_status") != "CLEAN":
+                    raise ValueError("ASSET_MALWARE_SCAN_REQUIRED: the uploaded asset must pass malware scanning before approval")
             record["status"] = status
             record["owner_id"] = record.get("owner_id") or actor_id
             record["decision_by"] = actor_id
@@ -434,9 +1320,24 @@ class KnowledgePackStore:
         with self._lock:
             draft = self.get_draft(tenant_id, draft_id, brand_id)
             snapshot = draft.get("snapshot")
-            errors = self._validate(snapshot, require_identity=True, base_brand_id=None)
+            validation_items = self._validate(snapshot, require_identity=True, base_brand_id=None)
+            conflict_codes = {"APPROVED_FACT_CONFLICT", "APPROVED_POLICY_CONFLICT", "APPROVED_TERMINOLOGY_CONFLICT"}
+            errors = [item for item in validation_items if item.get("code") not in conflict_codes]
+            warnings: list[dict[str, str]] = [
+                {**item, "message": item["message"] + " This conflict remains visible to retrieval and must be resolved or explicitly governed; it is not silently ranked away."}
+                for item in validation_items if item.get("code") in conflict_codes
+            ]
+            asset_manifest = snapshot.get("assets", {}) if isinstance(snapshot, dict) else {}
+            if isinstance(asset_manifest, dict):
+                for kind, policy in (asset_manifest.get("usage_policies", {}) or {}).items():
+                    if isinstance(policy, dict) and float(policy.get("clear_space_ratio", 0) or 0) > 0:
+                        warnings.append({
+                            "code": "ASSET_CLEAR_SPACE_MANUAL_REVIEW",
+                            "path": f"assets.usage_policies.{kind}.clear_space_ratio",
+                            "message": f"The {kind} policy requires {float(policy['clear_space_ratio']):.0%} clear space. Sigillum records this requirement but does not automatically certify geometric clear space; inspect the original asset before approval.",
+                        })
             active_root = self.active_root(tenant_id, brand_id)
-            active_pack = BrandPack(root=active_root)
+            active_pack = self.active_pack(tenant_id, brand_id)
             active_brand_id = active_pack.brand.get("brand_id")
             draft_brand_id = (snapshot.get("brand") or {}).get("brand_id")
             if draft_brand_id != active_brand_id:
@@ -481,19 +1382,192 @@ class KnowledgePackStore:
                             errors.append({"code": "ASSET_OBJECT_MISSING", "path": f"assets.approved_assets[{index}].storage_key", "message": "The approved asset object is missing from private object storage."})
                         except Exception:
                             errors.append({"code": "ASSET_OBJECT_UNAVAILABLE", "path": f"assets.approved_assets[{index}].storage_key", "message": "The approved asset could not be hash-verified in object storage."})
+                if asset.get("status") == "approved" and asset.get("storage_key") and asset.get("scan_status") != "CLEAN":
+                    errors.append({"code": "ASSET_MALWARE_SCAN_REQUIRED", "path": f"assets.approved_assets[{index}].scan_status", "message": "Approved uploaded assets must have a successful malware scan."})
+                elif asset.get("storage_key") and asset.get("scan_status") != "CLEAN":
+                    warnings.append({"code": "ASSET_QUARANTINED_PENDING_SCAN", "path": f"assets.approved_assets[{index}].scan_status", "message": "The uploaded asset remains private and cannot be used until malware scanning succeeds."})
                 if asset.get("status") == "approved" and asset.get("storage_key") and (not asset.get("approved_by") or not asset.get("approved_at")):
                     errors.append({"code": "ASSET_APPROVAL_PROVENANCE_REQUIRED", "path": f"assets.approved_assets[{index}]", "message": "Approved uploaded assets require an approving owner and timestamp."})
 
-            result = {"valid": not errors, "errors": errors, "warnings": [], "validated_at": _now()}
+            sources = (snapshot.get("sources") or {}).get("sources", [])
+            for index, source in enumerate(sources if isinstance(sources, list) else []):
+                if not isinstance(source, dict) or not source.get("storage_key"):
+                    continue
+                storage_key = str(source["storage_key"])
+                expected_prefix = f"brand-source-documents/{tenant_id}/{brand_id or self.DEFAULT_BRAND_ID}/"
+                if not storage_key.startswith(expected_prefix):
+                    errors.append({"code": "SOURCE_STORAGE_SCOPE_INVALID", "path": f"sources.sources[{index}].storage_key", "message": "Uploaded source storage keys must remain inside the current tenant and brand namespace."})
+                    continue
+                if source.get("status") == "approved":
+                    if source.get("scan_status") != "CLEAN":
+                        errors.append({"code": "SOURCE_MALWARE_SCAN_REQUIRED", "path": f"sources.sources[{index}].scan_status", "message": "Approved uploaded sources must have a successful malware scan."})
+                    if source.get("extraction_status") != "COMPLETED" or not str(source.get("reference_text") or "").strip():
+                        errors.append({"code": "SOURCE_EXTRACTION_INCOMPLETE", "path": f"sources.sources[{index}].extraction_status", "message": "Approved uploaded sources require complete extracted text."})
+                    expected_file_hash = str(source.get("file_sha256", "")).lower()
+                    if not re.fullmatch(r"[0-9a-f]{64}", expected_file_hash):
+                        errors.append({"code": "SOURCE_FILE_HASH_REQUIRED", "path": f"sources.sources[{index}].file_sha256", "message": "Approved uploaded sources require the original file SHA-256."})
+                    if asset_exists is not None:
+                        try:
+                            if not asset_exists(storage_key):
+                                errors.append({"code": "SOURCE_OBJECT_MISSING", "path": f"sources.sources[{index}].storage_key", "message": "The uploaded source object is missing from private storage."})
+                        except Exception:
+                            errors.append({"code": "SOURCE_OBJECT_UNAVAILABLE", "path": f"sources.sources[{index}].storage_key", "message": "The uploaded source object could not be verified in private storage."})
+                    if asset_hash is not None and expected_file_hash:
+                        try:
+                            if str(asset_hash(storage_key)).lower() != expected_file_hash:
+                                errors.append({"code": "SOURCE_FILE_HASH_MISMATCH", "path": f"sources.sources[{index}].file_sha256", "message": "The original source bytes no longer match the recorded SHA-256."})
+                        except Exception:
+                            errors.append({"code": "SOURCE_OBJECT_UNAVAILABLE", "path": f"sources.sources[{index}].storage_key", "message": "The uploaded source object could not be hash-verified."})
+                elif source.get("scan_status") != "CLEAN":
+                    warnings.append({"code": "SOURCE_QUARANTINED_PENDING_SCAN", "path": f"sources.sources[{index}].scan_status", "message": "The uploaded source remains private and cannot be used as authoritative evidence until malware scanning succeeds."})
+
+            result = {"valid": not errors, "errors": errors, "warnings": warnings, "validated_at": _now()}
             draft["validation"] = result
             draft["status"] = "VALIDATED" if not errors else "DRAFT"
             draft["updated_at"] = _now()
-            _write_json_atomic(self._draft_path(tenant_id, draft_id, brand_id), draft)
+            if self.session_factory is not None:
+                self._persist_draft(tenant_id, brand_id or self.DEFAULT_BRAND_ID, draft)
+            else:
+                _write_json_atomic(self._draft_path(tenant_id, draft_id, brand_id), draft)
             return result
+
+    def _publish_draft_database(
+        self, tenant_id: str, draft_id: str, actor_id: str, brand_id: str
+    ) -> dict[str, Any]:
+        version_root: Path | None = None
+        metadata: dict[str, Any] | None = None
+        draft_export: dict[str, Any] | None = None
+        pack_root = self._pack_root(tenant_id, brand_id)
+        with self._database(tenant_id, brand_id) as db:
+            head = db.scalar(select(models.BrandKnowledgePackHead).where(
+                models.BrandKnowledgePackHead.tenant_id == tenant_id,
+                models.BrandKnowledgePackHead.brand_id == brand_id,
+            ).with_for_update())
+            draft_row = db.scalar(select(models.BrandKnowledgePackDraft).where(
+                models.BrandKnowledgePackDraft.tenant_id == tenant_id,
+                models.BrandKnowledgePackDraft.brand_id == brand_id,
+                models.BrandKnowledgePackDraft.draft_id == draft_id,
+            ).with_for_update())
+            if head is None or draft_row is None:
+                raise FileNotFoundError("Draft Knowledge Pack not found")
+            if draft_row.status != "VALIDATED" or not (draft_row.validation or {}).get("valid"):
+                raise ValueError("Validate the draft successfully before publishing")
+            if head.active_version_id != draft_row.base_version_id or head.active_fingerprint != draft_row.base_fingerprint:
+                raise RuntimeError("This draft is stale because another Knowledge Pack version was published. Create a new draft from the active version.")
+
+            snapshot = deepcopy(draft_row.snapshot)
+            conflict_codes = {"APPROVED_FACT_CONFLICT", "APPROVED_POLICY_CONFLICT", "APPROVED_TERMINOLOGY_CONFLICT"}
+            errors = [item for item in self._validate(snapshot, require_identity=True) if item.get("code") not in conflict_codes]
+            if errors:
+                raise ValueError("Draft validation is no longer valid")
+            active_version = db.scalar(select(models.BrandKnowledgePackVersion).where(
+                models.BrandKnowledgePackVersion.tenant_id == tenant_id,
+                models.BrandKnowledgePackVersion.brand_id == brand_id,
+                models.BrandKnowledgePackVersion.version_id == head.active_version_id,
+            ))
+            if active_version is None:
+                raise RuntimeError("Active Knowledge Pack version is missing")
+            active_meta = self._version_dict(active_version, is_active=True)
+            versions = db.scalars(select(models.BrandKnowledgePackVersion).where(
+                models.BrandKnowledgePackVersion.tenant_id == tenant_id,
+                models.BrandKnowledgePackVersion.brand_id == brand_id,
+            )).all()
+            version_numbers = [
+                int(match.group(1))
+                for row in versions
+                if (match := re.match(r"^v(\d+)$", row.version_id))
+            ]
+            next_number = max(version_numbers or [0]) + 1
+            version_id = f"v{next_number:04d}"
+            version_root = pack_root / "versions" / version_id
+            if version_root.exists():
+                # A previous process may have left an orphan after a failed DB
+                # commit. It is safe to clear only because no catalogue row exists.
+                existing = db.scalar(select(models.BrandKnowledgePackVersion.id).where(
+                    models.BrandKnowledgePackVersion.tenant_id == tenant_id,
+                    models.BrandKnowledgePackVersion.brand_id == brand_id,
+                    models.BrandKnowledgePackVersion.version_id == version_id,
+                ))
+                if existing is not None:
+                    raise RuntimeError("Version identifier collision; publication aborted")
+                shutil.rmtree(version_root)
+            new_pack_version = self._next_semver(str(active_meta.get("pack_version", "1.0.0")))
+            snapshot.setdefault("brand", {})["pack_version"] = new_pack_version
+            fingerprint = _canonical_hash(snapshot)
+
+            # Materialise the immutable file view before the database transaction
+            # commits. If any write fails, the authoritative pointer is unchanged.
+            active_root = pack_root / "versions" / head.active_version_id
+            self._write_snapshot(version_root, snapshot, copy_assets_from=active_root, copy_seed_assets=False)
+            now = datetime.now(timezone.utc)
+            metadata = {
+                "version_id": version_id,
+                "pack_id": head.pack_id,
+                "brand_id": brand_id,
+                "pack_version": new_pack_version,
+                "fingerprint": fingerprint,
+                "status": "PUBLISHED",
+                "created_at": now.isoformat(),
+                "created_by": actor_id,
+                "base_version_id": head.active_version_id,
+                "draft_id": draft_id,
+            }
+            _write_json_atomic(version_root / "version.json", metadata)
+            db.add(models.BrandKnowledgePackVersion(
+                tenant_id=tenant_id,
+                brand_id=brand_id,
+                pack_id=head.pack_id,
+                version_id=version_id,
+                pack_version=new_pack_version,
+                fingerprint=fingerprint,
+                status="PUBLISHED",
+                base_version_id=head.active_version_id,
+                snapshot=snapshot,
+                created_by=actor_id,
+                created_at=now,
+            ))
+            expected_active_version = head.active_version_id
+            expected_revision = head.revision
+            result = db.execute(update(models.BrandKnowledgePackHead).where(
+                models.BrandKnowledgePackHead.id == head.id,
+                models.BrandKnowledgePackHead.active_version_id == expected_active_version,
+                models.BrandKnowledgePackHead.revision == expected_revision,
+            ).values(
+                active_version_id=version_id,
+                active_fingerprint=fingerprint,
+                revision=expected_revision + 1,
+                updated_at=now,
+            ))
+            if result.rowcount != 1:
+                raise RuntimeError("The active Knowledge Pack changed concurrently. Reload and publish from a new draft.")
+            draft_row.status = "PUBLISHED"
+            draft_row.published_version_id = version_id
+            draft_row.published_fingerprint = fingerprint
+            draft_row.updated_at = now
+            draft_row.updated_by = actor_id
+            draft_row.revision += 1
+            draft_export = self._draft_dict(draft_row)
+
+        # Database head is authoritative. The file pointer is only a compatibility
+        # mirror used by older local tooling and is repaired on the next read.
+        try:
+            _write_json_atomic(pack_root / "active.json", {
+                "version_id": metadata["version_id"],
+                "fingerprint": metadata["fingerprint"],
+                "activated_at": metadata["created_at"],
+            })
+            _write_json_atomic(self._draft_path(tenant_id, draft_id, brand_id), draft_export)
+        except OSError:
+            # The immutable snapshot and active pointer are safely committed in
+            # the database; a failed mirror write must not report a false rollback.
+            pass
+        return metadata
 
     def publish_draft(
         self, tenant_id: str, draft_id: str, actor_id: str, brand_id: str | None = None
     ) -> dict[str, Any]:
+        if self.session_factory is not None:
+            return self._publish_draft_database(tenant_id, draft_id, actor_id, brand_id or self.DEFAULT_BRAND_ID)
         with self._lock:
             draft = self.get_draft(tenant_id, draft_id, brand_id)
             if draft.get("status") != "VALIDATED" or not (draft.get("validation") or {}).get("valid"):
@@ -503,7 +1577,8 @@ class KnowledgePackStore:
             if active_meta["version_id"] != draft.get("base_version_id"):
                 raise RuntimeError("This draft is stale because another Knowledge Pack version was published. Create a new draft from the active version.")
             snapshot = draft["snapshot"]
-            errors = self._validate(snapshot, require_identity=True)
+            conflict_codes = {"APPROVED_FACT_CONFLICT", "APPROVED_POLICY_CONFLICT", "APPROVED_TERMINOLOGY_CONFLICT"}
+            errors = [item for item in self._validate(snapshot, require_identity=True) if item.get("code") not in conflict_codes]
             if errors:
                 raise ValueError("Draft validation is no longer valid")
             current_n = int(active_meta["version_id"].lstrip("v"))
@@ -688,6 +1763,9 @@ class KnowledgePackStore:
         if not isinstance(assets, dict):
             add("ASSETS_INVALID", "assets", "Asset manifest must be a JSON object.")
         else:
+            policy_errors = validate_usage_policies(assets.get("usage_policies", {}), brand.get("channels", []))
+            errors.extend(policy_errors)
+            usage_policies = assets.get("usage_policies", {}) if isinstance(assets.get("usage_policies", {}), dict) else {}
             approved_assets = assets.get("approved_assets", [])
             if not isinstance(approved_assets, list):
                 add("ASSET_LIST_INVALID", "assets.approved_assets", "approved_assets must be an array.")
@@ -711,6 +1789,41 @@ class KnowledgePackStore:
                         windows_candidate = PureWindowsPath(raw_path)
                         if candidate.is_absolute() or windows_candidate.is_absolute() or ".." in candidate.parts or ".." in windows_candidate.parts or "\\" in raw_path or ":" in raw_path:
                             add("ASSET_PATH_UNSAFE", f"{path}.file_path", "Asset paths must be relative, use forward slashes and cannot traverse directories or drive roots.")
+                    policy = usage_policies.get(asset.get("kind"))
+                    if asset.get("status") == "approved" and isinstance(policy, dict):
+                        try:
+                            width, height = int(asset.get("width", 0)), int(asset.get("height", 0))
+                        except (TypeError, ValueError):
+                            width, height = 0, 0
+                        minimum_width = int(policy.get("min_width", 0) or 0)
+                        minimum_height = int(policy.get("min_height", 0) or 0)
+                        if width < minimum_width:
+                            add("ASSET_MIN_WIDTH_NOT_MET", f"{path}.width", f"Approved {asset.get('kind')} assets require at least {minimum_width}px width; this asset is {width}px.")
+                        if height < minimum_height:
+                            add("ASSET_MIN_HEIGHT_NOT_MET", f"{path}.height", f"Approved {asset.get('kind')} assets require at least {minimum_height}px height; this asset is {height}px.")
+                        allowed_palette = policy.get("palette_hex") or []
+                        if (
+                            isinstance(allowed_palette, list)
+                            and allowed_palette
+                            and all(isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color) for color in allowed_palette)
+                        ):
+                            measured_palette = asset.get("palette")
+                            if not isinstance(measured_palette, list) or not measured_palette:
+                                add(
+                                    "ASSET_PALETTE_UNMEASURABLE",
+                                    f"{path}.palette",
+                                    "A palette rule is configured, but this asset has no measured palette. Re-upload the asset to extract its palette or remove the palette rule.",
+                                )
+                            else:
+                                tolerance = policy.get("palette_tolerance", 80)
+                                required_ratio = policy.get("minimum_palette_match_ratio", 0.7)
+                                if (
+                                    isinstance(tolerance, (int, float)) and not isinstance(tolerance, bool)
+                                    and isinstance(required_ratio, (int, float)) and not isinstance(required_ratio, bool)
+                                ):
+                                    score = palette_match_ratio(measured_palette, allowed_palette, float(tolerance))
+                                    if score < float(required_ratio):
+                                        add("ASSET_PALETTE_POLICY_NOT_MET", f"{path}.palette", f"Only {score:.0%} of the measured palette is within the approved brand palette tolerance; at least {float(required_ratio):.0%} is required.")
 
         sources = snapshot.get("sources", {"sources": []})
         if not isinstance(sources, dict) or not isinstance(sources.get("sources", []), list):
@@ -776,6 +1889,85 @@ class KnowledgePackStore:
                     except ValueError:
                         pass
 
+            def _parsed_scope_date(value: Any) -> datetime | None:
+                if not value:
+                    return None
+                try:
+                    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                    return parsed if parsed.tzinfo is not None else None
+                except (TypeError, ValueError):
+                    return None
+
+            def _validity_overlaps(left: dict[str, Any], right: dict[str, Any]) -> bool:
+                left_start = _parsed_scope_date(left.get("valid_from"))
+                left_end = _parsed_scope_date(left.get("valid_until"))
+                right_start = _parsed_scope_date(right.get("valid_from"))
+                right_end = _parsed_scope_date(right.get("valid_until"))
+                if left_end and right_start and left_end < right_start:
+                    return False
+                if right_end and left_start and right_end < left_start:
+                    return False
+                return True
+
+            def _scope_key(record: dict[str, Any]) -> tuple[str, ...]:
+                return tuple(
+                    str(record.get(field, "") or "").strip().casefold()
+                    for field in ("subject", "predicate", "product", "product_id", "geography", "region", "channel", "locale", "audience", "population")
+                )
+
+            approved_facts = [
+                (index, fact) for index, fact in enumerate(facts)
+                if isinstance(fact, dict) and fact.get("status") == "approved"
+            ]
+            for position, (left_index, left) in enumerate(approved_facts):
+                for right_index, right in approved_facts[position + 1 :]:
+                    left_authority = left.get("source_precedence", left.get("authority_rank", 1))
+                    right_authority = right.get("source_precedence", right.get("authority_rank", 1))
+                    left_value = tuple(str(left.get(field, "")).strip().casefold() for field in ("value", "unit", "qualifier", "denominator"))
+                    right_value = tuple(str(right.get(field, "")).strip().casefold() for field in ("value", "unit", "qualifier", "denominator"))
+                    if (
+                        _scope_key(left) == _scope_key(right)
+                        and left_authority == right_authority
+                        and left_value != right_value
+                        and _validity_overlaps(left, right)
+                    ):
+                        add("APPROVED_FACT_CONFLICT", f"facts[{left_index}]", f"Approved fact conflicts with facts[{right_index}] at the same authority and overlapping scope/validity.")
+                        add("APPROVED_FACT_CONFLICT", f"facts[{right_index}]", f"Approved fact conflicts with facts[{left_index}] at the same authority and overlapping scope/validity.")
+
+            approved_policies = [
+                (index, policy) for index, policy in enumerate(policies)
+                if isinstance(policy, dict) and policy.get("status") == "approved"
+            ]
+            for position, (left_index, left) in enumerate(approved_policies):
+                for right_index, right in approved_policies[position + 1 :]:
+                    left_rule = str(left.get("rule", left.get("name", left.get("category", "")))).strip().casefold()
+                    right_rule = str(right.get("rule", right.get("name", right.get("category", "")))).strip().casefold()
+                    if (
+                        left_rule and left_rule == right_rule
+                        and _scope_key(left) == _scope_key(right)
+                        and (left.get("severity"), left.get("required_action", left.get("action"))) != (right.get("severity"), right.get("required_action", right.get("action")))
+                        and _validity_overlaps(left, right)
+                    ):
+                        add("APPROVED_POLICY_CONFLICT", f"policies[{left_index}]", f"Policy conflicts with policies[{right_index}] for the same rule and overlapping scope/validity.")
+                        add("APPROVED_POLICY_CONFLICT", f"policies[{right_index}]", f"Policy conflicts with policies[{left_index}] for the same rule and overlapping scope/validity.")
+
+            if isinstance(terminology, dict):
+                preferred = terminology.get("preferred_terms", [])
+                prohibited = terminology.get("prohibited_or_review_terms", [])
+                for preferred_index, preferred_record in enumerate(preferred if isinstance(preferred, list) else []):
+                    if not isinstance(preferred_record, dict) or preferred_record.get("status", "approved") != "approved":
+                        continue
+                    preferred_text = str(preferred_record.get("preferred", "")).strip().casefold()
+                    for prohibited_index, prohibited_record in enumerate(prohibited if isinstance(prohibited, list) else []):
+                        if not isinstance(prohibited_record, dict) or prohibited_record.get("status", "approved") != "approved":
+                            continue
+                        prohibited_text = str(prohibited_record.get("variant", "")).strip().casefold()
+                        preferred_locale = str(preferred_record.get("locale", "")).strip().casefold()
+                        prohibited_locale = str(prohibited_record.get("locale", "")).strip().casefold()
+                        if preferred_text and preferred_text == prohibited_text and preferred_locale == prohibited_locale:
+                            add("APPROVED_TERMINOLOGY_CONFLICT", f"terminology.preferred_terms[{preferred_index}]", f"Preferred term conflicts with terminology.prohibited_or_review_terms[{prohibited_index}] for the same locale.")
+                            add("APPROVED_TERMINOLOGY_CONFLICT", f"terminology.prohibited_or_review_terms[{prohibited_index}]", f"Prohibited term conflicts with terminology.preferred_terms[{preferred_index}] for the same locale.")
+
             approved_sources = {
                 str(item.get("source_id")): item
                 for item in sources.get("sources", [])
@@ -801,7 +1993,9 @@ class KnowledgePackStore:
                     quote = str(source_ref.get("quote", "")).strip()
                     if not quote:
                         add("FACT_SOURCE_QUOTE_REQUIRED", f"facts[{index}].source_ref.quote", "Approved facts require the exact supporting source excerpt.")
-                    elif approved_source.get("reference_text") and quote not in str(approved_source["reference_text"]):
+                    elif not str(approved_source.get("reference_text") or "").strip():
+                        add("FACT_SOURCE_TEXT_UNAVAILABLE", f"facts[{index}].source_ref.quote", "A source URI alone is provenance metadata; approved facts require retained source text against which the exact quote can be checked.")
+                    elif quote not in str(approved_source["reference_text"]):
                         add("FACT_SOURCE_QUOTE_NOT_FOUND", f"facts[{index}].source_ref.quote", "The fact's source quote is not present in the approved source record's reference text.")
 
         for index, policy in enumerate(policies):

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from sigillum.modules.knowledge.store import KnowledgePackStore
 
 
@@ -225,7 +227,7 @@ def test_source_reference_text_must_match_its_recorded_hash(tmp_path):
     assert any(item["code"] == "SOURCE_HASH_MISMATCH" for item in errors)
 
 
-def test_uploaded_asset_storage_key_cannot_cross_tenant_or_brand_namespace(tmp_path):
+def test_generic_editor_cannot_inject_uploaded_asset_storage_provenance(tmp_path):
     store = KnowledgePackStore(seed_root(), tmp_path / "packs")
     draft = store.create_draft("tenant_asset_scope", "owner-1", "brand_alpha", "Alpha")
     assets = dict(draft["snapshot"]["assets"])
@@ -233,14 +235,151 @@ def test_uploaded_asset_storage_key_cannot_cross_tenant_or_brand_namespace(tmp_p
         "asset_id": "ASSET-OTHER-BRAND",
         "name": "Foreign asset reference",
         "kind": "logo",
-        "status": "approved",
-        "approved_by": "owner-1",
-        "approved_at": "2026-11-09T00:00:00+05:30",
-        "sha256": "0" * 64,
+        "status": "draft",
         "storage_key": "brand-assets/tenant_other/brand_beta/draft/asset.png",
     }]
-    store.update_section("tenant_asset_scope", draft["draft_id"], "assets", assets, "owner-1", "brand_alpha")
+    with pytest.raises(ValueError, match="upload provenance"):
+        store.update_section("tenant_asset_scope", draft["draft_id"], "assets", assets, "owner-1", "brand_alpha")
 
-    validation = store.validate_draft("tenant_asset_scope", draft["draft_id"], "brand_alpha")
-    assert validation["valid"] is False
-    assert any(item["code"] == "ASSET_SCOPE_INVALID" for item in validation["errors"])
+
+def test_generic_editor_cannot_change_uploaded_source_extraction_provenance(tmp_path):
+    store = KnowledgePackStore(seed_root(), tmp_path / "packs")
+    draft = store.create_draft("tenant_source_provenance", "owner-1")
+    source = {
+        "source_id": "SRC-UPLOADED-001",
+        "name": "Uploaded source",
+        "source_type": "policy_document",
+        "version": 1,
+        "status": "draft",
+        "storage_key": "brand-source-documents/tenant_source_provenance/brand_orbita_demo/draft/original.docx",
+        "file_sha256": "a" * 64,
+        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "size_bytes": 2048,
+        "uploaded_by": "owner-1",
+        "uploaded_at": "2026-11-09T00:00:00+00:00",
+        "source_format": "docx",
+        "original_filename": "source.docx",
+        "scan_status": "CLEAN",
+        "scan_engine": "clamav",
+        "scan_scanned_at": "2026-11-09T00:00:00+00:00",
+        "scan_signature": None,
+        "extraction_key": "brand-source-extractions/tenant_source_provenance/brand_orbita_demo/draft/extraction.json",
+        "extraction_status": "COMPLETED",
+        "extraction_warnings": [],
+        "region_count": 1,
+        "reference_text": "Approved exact source wording.",
+        "sha256": "b" * 64,
+    }
+    store.append_source("tenant_source_provenance", "brand_orbita_demo", draft["draft_id"], source, "owner-1")
+    latest = store.get_draft("tenant_source_provenance", draft["draft_id"], "brand_orbita_demo")
+    changed = dict(latest["snapshot"]["sources"])
+    changed["sources"] = [dict(item) for item in changed["sources"]]
+    changed["sources"][-1]["reference_text"] = "A forged replacement excerpt."
+
+    with pytest.raises(ValueError, match="immutable upload provenance"):
+        store.update_section("tenant_source_provenance", draft["draft_id"], "sources", changed, "owner-1", "brand_orbita_demo")
+
+
+def test_version_comparison_reports_precise_brand_field_changes(tmp_path):
+    store = KnowledgePackStore(seed_root(), tmp_path / "packs")
+    draft = store.create_draft("tenant_version_compare", "owner-1")
+    changed_brand = dict(draft["snapshot"]["brand"])
+    changed_brand["description"] = "A new, reviewable version description."
+    store.update_section("tenant_version_compare", draft["draft_id"], "brand", changed_brand, "owner-1")
+    assert store.validate_draft("tenant_version_compare", draft["draft_id"])["valid"] is True
+    store.publish_draft("tenant_version_compare", draft["draft_id"], "owner-1")
+
+    comparison = store.compare_versions("tenant_version_compare", "brand_orbita_demo", "v0001", "v0002")
+
+    assert comparison["change_count"] >= 1
+    brand_change = next(item for item in comparison["changes"] if item["section"] == "brand")
+    description = next(item for item in brand_change["fields"] if item["field"] == "description")
+    assert description["after"] == "A new, reviewable version description."
+
+
+def test_version_diff_redacts_private_object_storage_references_and_bounds_source_text():
+    private_key = "brand-source-documents/tenant/brand/draft/file.docx"
+    assert KnowledgePackStore._diff_value(private_key, "storage_key") == "[redacted private storage reference]"
+
+    safe = KnowledgePackStore._diff_record({
+        "source_id": "SRC-001",
+        "storage_key": private_key,
+        "metadata": {"extraction_key": "private/extraction.json"},
+        "reference_text": "x" * 800,
+    })
+
+    assert safe["storage_key"] == "[redacted private storage reference]"
+    assert safe["metadata"]["extraction_key"] == "[redacted private storage reference]"
+    assert len(safe["reference_text"]) == 500
+    assert private_key not in str(safe)
+
+
+def test_asset_usage_policy_enforces_dimensions_and_measured_palette(tmp_path):
+    store = KnowledgePackStore(seed_root(), tmp_path / "packs")
+    draft = store.create_draft("tenant_asset_policy", "owner-1", "brand_alpha", "Alpha")
+    snapshot = draft["snapshot"]
+    snapshot["assets"]["approved_assets"] = [{
+        "asset_id": "ASSET-POLICY-001",
+        "name": "Small black logo",
+        "kind": "logo",
+        "status": "approved",
+        "width": 80,
+        "height": 24,
+        "palette": [{"hex": "#000000", "ratio": 1.0}],
+    }]
+    snapshot["assets"]["usage_policies"] = {
+        "logo": {
+            "allowed_channels": ["direct_web"],
+            "allowed_uses": ["brand_lockup"],
+            "min_width": 300,
+            "min_height": 80,
+            "palette_hex": ["#FFFFFF"],
+            "palette_tolerance": 5,
+            "minimum_palette_match_ratio": 0.8,
+            "clear_space_ratio": 0.1,
+            "severity": "review_required",
+        }
+    }
+    errors = store._validate(snapshot, require_identity=True)
+    codes = {item["code"] for item in errors}
+    assert "ASSET_MIN_WIDTH_NOT_MET" in codes
+    assert "ASSET_MIN_HEIGHT_NOT_MET" in codes
+    assert "ASSET_PALETTE_POLICY_NOT_MET" in codes
+
+
+def test_palette_policy_abstains_when_approved_asset_has_no_measured_palette(tmp_path):
+    store = KnowledgePackStore(seed_root(), tmp_path / "packs")
+    draft = store.create_draft("tenant_asset_palette_missing", "owner-1", "brand_alpha", "Alpha")
+    snapshot = draft["snapshot"]
+    snapshot["assets"]["approved_assets"] = [{
+        "asset_id": "ASSET-LEGACY-001",
+        "name": "Legacy logo without extracted palette",
+        "kind": "logo",
+        "status": "approved",
+        "width": 640,
+        "height": 320,
+    }]
+    snapshot["assets"]["usage_policies"] = {
+        "logo": {"palette_hex": ["#FFFFFF"], "palette_tolerance": 20, "minimum_palette_match_ratio": 0.8}
+    }
+    errors = store._validate(snapshot, require_identity=True)
+    codes = {item["code"] for item in errors}
+    assert "ASSET_PALETTE_UNMEASURABLE" in codes
+    assert "ASSET_PALETTE_POLICY_NOT_MET" not in codes
+
+
+def test_asset_usage_policy_rejects_unknown_channels_and_invalid_colours():
+    store = KnowledgePackStore(seed_root(), Path("/tmp/sigillum-asset-policy-schema-test"))
+    draft = store.create_draft("tenant_asset_policy_schema", "owner-1", "brand_alpha", "Alpha")
+    snapshot = draft["snapshot"]
+    snapshot["assets"]["usage_policies"] = {
+        "logo": {
+            "allowed_channels": ["not_a_brand_channel"],
+            "allowed_uses": ["brand_lockup"],
+            "palette_hex": ["blue"],
+        }
+    }
+    errors = store._validate(snapshot, require_identity=True)
+    codes = {item["code"] for item in errors}
+    assert "ASSET_USAGE_CHANNEL_UNKNOWN" in codes
+    assert "ASSET_USAGE_PALETTE_INVALID" in codes

@@ -13,6 +13,14 @@ from sigillum.infrastructure.security import hash_password
 @pytest.fixture(scope="module")
 def client():
     from apps.api.main import app
+    from sigillum.api import routes as api_routes
+
+    # API integration tests use a deterministic clean scanner. Scanner transport
+    # failures and infected-result gating are exercised in dedicated tests.
+    api_routes.scan_upload_bytes = lambda _payload: {
+        "status": "CLEAN", "engine": "test-clamav",
+        "scanned_at": "2026-11-09T00:00:00+00:00", "signature": None,
+    }
     with TestClient(app) as test_client:
         yield test_client
 
@@ -126,6 +134,16 @@ def test_brand_owner_can_draft_validate_publish_and_version_pack(client):
     assert latest_payload["snapshot"]["brand"]["description"] == updated_brand["description"]
     assert latest_payload["active_version"]["version_id"] == "v0002"
     assert len(latest_payload["versions"]) == 2
+
+    comparison = client.get(
+        "/api/v1/brands/current/versions/compare",
+        headers=headers,
+        params={"from_version_id": "v0001", "to_version_id": "v0002"},
+    )
+    assert comparison.status_code == 200, comparison.text
+    brand_change = next(item for item in comparison.json()["changes"] if item["section"] == "brand")
+    description_change = next(item for item in brand_change["fields"] if item["field"] == "description")
+    assert description_change["after"] == updated_brand["description"]
 
     # Publishing changes future review context without rewriting an earlier review snapshot.
     after_review = client.post(
@@ -265,6 +283,17 @@ def test_source_registry_and_private_asset_upload_approval_flow(client):
     )
     assert asset_decision.status_code == 200, asset_decision.text
 
+    decision_history = client.get(
+        f"/api/v1/brands/current/drafts/{draft_id}/decisions", headers=headers
+    )
+    assert decision_history.status_code == 200, decision_history.text
+    decision_rows = decision_history.json()["decisions"]
+    assert [(item["record_type"], item["record_id"], item["status"]) for item in decision_rows] == [
+        ("source", source_id, "approved"),
+        ("asset", asset_id, "approved"),
+    ]
+    assert all(item["reason"] and item["actor_id"] for item in decision_rows)
+
     validation = client.post(f"/api/v1/brands/current/drafts/{draft_id}/validate", headers=headers)
     assert validation.status_code == 200, validation.text
     assert validation.json()["valid"] is True, validation.json()
@@ -403,3 +432,332 @@ def test_non_owner_cannot_register_or_decide_knowledge_sources(client):
         json={"status": "approved"},
     )
     assert creator_decision.status_code == 403, creator_decision.text
+
+
+def test_knowledge_pack_database_is_canonical_across_store_instances_and_rejects_stale_drafts(client, tmp_path):
+    from sigillum.config import get_settings
+    from sigillum.infrastructure.database.session import SessionLocal
+    from sigillum.modules.knowledge.store import KnowledgePackStore
+
+    tenant_id = f"tenant_pack_restart_{uuid4().hex[:10]}"
+    owner_email = f"restart.owner.{uuid4().hex[:8]}@orbita.demo"
+    _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+
+    created = client.post("/api/v1/brands/current/drafts", headers=headers)
+    assert created.status_code == 200, created.text
+    draft_id = created.json()["draft_id"]
+
+    settings = get_settings()
+    store = KnowledgePackStore(settings.brand_pack_path, tmp_path / "instance_a", SessionLocal)
+    stale_reader = KnowledgePackStore(settings.brand_pack_path, tmp_path / "instance_b", SessionLocal)
+
+    first = store.get_draft(tenant_id, draft_id, "brand_orbita_demo")
+    stale = stale_reader.get_draft(tenant_id, draft_id, "brand_orbita_demo")
+    first["snapshot"]["brand"]["description"] = "Persisted by instance A."
+    first["updated_by"] = "instance-a"
+    persisted = store._persist_draft(tenant_id, "brand_orbita_demo", first)
+    assert persisted["revision"] == first["revision"] + 1
+
+    stale["snapshot"]["brand"]["description"] = "Must never overwrite instance A."
+    with pytest.raises(ValueError, match="changed in another session"):
+        stale_reader._persist_draft(tenant_id, "brand_orbita_demo", stale)
+
+    reloaded = stale_reader.get_draft(tenant_id, draft_id, "brand_orbita_demo")
+    assert reloaded["snapshot"]["brand"]["description"] == "Persisted by instance A."
+
+    # A fresh storage root has no filesystem pointer; it reconstructs the active
+    # pack from the DB snapshot and does not require the original process mirror.
+    active = store.active_pack(tenant_id, "brand_orbita_demo")
+    import shutil
+    mirror_root = store._pack_root(tenant_id, "brand_orbita_demo")
+    if mirror_root.exists():
+        shutil.rmtree(mirror_root)
+    restarted = KnowledgePackStore(settings.brand_pack_path, tmp_path / "fresh_instance", SessionLocal)
+    restored = restarted.active_pack(tenant_id, "brand_orbita_demo")
+    assert restored.brand["brand_id"] == active.brand["brand_id"]
+    assert restored.brand["brand_name"] == active.brand["brand_name"]
+    assert restored.fingerprint() == active.fingerprint()
+
+
+def test_build_012_filesystem_draft_is_imported_into_database_catalog(client, tmp_path):
+    import json
+    from sigillum.config import get_settings
+    from sigillum.infrastructure.database.session import SessionLocal
+    from sigillum.modules.knowledge.store import KnowledgePackStore
+
+    tenant_id = f"tenant_legacy_draft_{uuid4().hex[:10]}"
+    owner_email = f"legacy.draft.{uuid4().hex[:8]}@orbita.demo"
+    _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+    management = client.get("/api/v1/brands/current/management", headers=headers)
+    assert management.status_code == 200, management.text
+
+    settings = get_settings()
+    store = KnowledgePackStore(settings.brand_pack_path, tmp_path / "legacy-build-012-root", SessionLocal)
+    active = store.active_pack(tenant_id, "brand_orbita_demo")
+    metadata = store.active_metadata(tenant_id, "brand_orbita_demo")
+    draft_id = str(uuid4())
+    legacy_snapshot = active.snapshot()
+    legacy_snapshot["brand"]["description"] = "Draft recovered from the Build 012 filesystem store."
+    legacy_draft = {
+        "draft_id": draft_id,
+        "brand_id": "brand_orbita_demo",
+        "pack_id": metadata["pack_id"],
+        "base_version_id": metadata["version_id"],
+        "base_fingerprint": metadata["fingerprint"],
+        "status": "DRAFT",
+        "created_at": "2026-11-09T00:00:00+00:00",
+        "created_by": "legacy-build-012-owner",
+        "updated_at": "2026-11-09T00:00:00+00:00",
+        "updated_by": "legacy-build-012-owner",
+        "snapshot": legacy_snapshot,
+        "validation": None,
+    }
+    draft_path = store._draft_path(tenant_id, draft_id, "brand_orbita_demo")
+    draft_path.parent.mkdir(parents=True, exist_ok=True)
+    draft_path.write_text(json.dumps(legacy_draft), encoding="utf-8")
+
+    # A fresh store instance sees the DB head, imports the Build 012 draft once,
+    # and serves the recovered draft from the database catalogue.
+    store.ensure_initialized(tenant_id, "brand_orbita_demo")
+    recovered = store.get_draft(tenant_id, draft_id, "brand_orbita_demo")
+    assert recovered["snapshot"]["brand"]["description"] == legacy_snapshot["brand"]["description"]
+    assert recovered["base_version_id"] == metadata["version_id"]
+    with SessionLocal() as db:
+        from sqlalchemy import select
+        row = db.scalar(select(models.BrandKnowledgePackDraft).where(
+            models.BrandKnowledgePackDraft.tenant_id == tenant_id,
+            models.BrandKnowledgePackDraft.brand_id == "brand_orbita_demo",
+            models.BrandKnowledgePackDraft.draft_id == draft_id,
+        ))
+        assert row is not None
+
+
+def test_build_012_version_history_and_published_draft_migrate_into_catalogue(client):
+    from sigillum.api import routes as api_routes
+    from sigillum.modules.knowledge.store import KnowledgePackStore
+
+    tenant_id = f"tenant_pack_history_{uuid4().hex[:10]}"
+    owner_email = f"history.owner.{uuid4().hex[:8]}@orbita.demo"
+    _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+
+    # Simulate a Build 012 installation: create and publish using the old
+    # filesystem adapter before the API's DB-backed store has a catalogue head.
+    filesystem_store = KnowledgePackStore(
+        api_routes.settings.brand_pack_path,
+        api_routes.pack_store.root,
+    )
+    draft = filesystem_store.create_draft(tenant_id, "legacy-owner", "brand_orbita_demo", "ORBITA")
+    changed_brand = dict(draft["snapshot"]["brand"])
+    changed_brand["description"] = "Published by the Build 012 filesystem-only store."
+    filesystem_store.update_section(
+        tenant_id, draft["draft_id"], "brand", changed_brand, "legacy-owner", "brand_orbita_demo"
+    )
+    assert filesystem_store.validate_draft(tenant_id, draft["draft_id"], "brand_orbita_demo")["valid"]
+    published = filesystem_store.publish_draft(
+        tenant_id, draft["draft_id"], "legacy-owner", "brand_orbita_demo"
+    )
+    assert published["version_id"] == "v0002"
+
+    # The first DB-backed API read imports the full version history, not only
+    # the active version, and recovers the published draft record as well.
+    management = client.get("/api/v1/brands/current/management", headers=headers)
+    assert management.status_code == 200, management.text
+    result = management.json()
+    assert result["active_version"]["version_id"] == "v0002"
+    assert {item["version_id"] for item in result["versions"]} == {"v0001", "v0002"}
+    assert result["snapshot"]["brand"]["description"] == "Published by the Build 012 filesystem-only store."
+
+    recovered_draft = client.get(
+        f"/api/v1/brands/current/drafts/{draft['draft_id']}", headers=headers
+    )
+    assert recovered_draft.status_code == 200, recovered_draft.text
+    assert recovered_draft.json()["status"] == "PUBLISHED"
+    assert recovered_draft.json()["published_version_id"] == "v0002"
+
+
+
+def test_uploaded_knowledge_source_waits_for_clean_scan_then_extracts_and_downloads(client):
+    from io import BytesIO
+    from docx import Document
+    from sigillum.api import routes as api_routes
+
+    tenant_id = f"tenant_source_scan_{uuid4().hex[:10]}"
+    owner_email = f"source.scan.{uuid4().hex[:8]}@orbita.demo"
+    _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+    draft_response = client.post("/api/v1/brands/current/drafts", headers=headers)
+    assert draft_response.status_code == 200, draft_response.text
+    draft_id = draft_response.json()["draft_id"]
+
+    document = Document()
+    document.add_heading("ORBITA Product Specification", level=1)
+    document.add_paragraph("The ORBITA Air One includes a verified 24-hour battery life under controlled test conditions.")
+    payload = BytesIO()
+    document.save(payload)
+    docx_bytes = payload.getvalue()
+
+    old_scanner = api_routes.scan_upload_bytes
+    try:
+        api_routes.scan_upload_bytes = lambda _data: {
+            "status": "UNAVAILABLE", "engine": "test-clamav", "scanned_at": "2026-11-09T00:00:00+00:00", "signature": None,
+        }
+        upload = client.post(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/upload",
+            headers=headers,
+            data={"name": "ORBITA Product Specification", "source_type": "product_specification", "version": "1"},
+            files={"file": ("orbita-spec.docx", docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+        assert upload.status_code == 200, upload.text
+        source = upload.json()["source"]
+        source_id = source["source_id"]
+        assert source["scan_status"] == "UNAVAILABLE"
+        assert source["extraction_status"] == "PENDING_SCAN"
+        assert source["reference_text"] is None
+        assert upload.json()["authoritative"] is False
+
+        blocked_decision = client.post(
+            f"/api/v1/brands/current/drafts/{draft_id}/records/source/{source_id}/decision",
+            headers=headers,
+            json={"status": "approved", "reason": "Attempt before successful malware scan."},
+        )
+        assert blocked_decision.status_code == 422
+        assert blocked_decision.json()["detail"]["code"] == "INVALID_KNOWLEDGE_DECISION"
+        blocked_download = client.get(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/{source_id}/download", headers=headers
+        )
+        assert blocked_download.status_code == 423
+
+        api_routes.scan_upload_bytes = lambda _data: {
+            "status": "CLEAN", "engine": "test-clamav", "scanned_at": "2026-11-09T00:01:00+00:00", "signature": None,
+        }
+        rescanned = client.post(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/{source_id}/scan", headers=headers
+        )
+        assert rescanned.status_code == 200, rescanned.text
+        assert rescanned.json()["scan_status"] == "CLEAN"
+        assert rescanned.json()["extraction_status"] == "COMPLETED"
+
+        extraction = client.get(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/{source_id}/extraction", headers=headers
+        )
+        assert extraction.status_code == 200, extraction.text
+        assert extraction.json()["regions_returned"] >= 1
+        assert "24-hour battery life" in extraction.json()["regions"][1]["text"] or "24-hour battery life" in " ".join(
+            str(item.get("text", "")) for item in extraction.json()["regions"]
+        )
+
+        download = client.get(
+            f"/api/v1/brands/current/drafts/{draft_id}/sources/{source_id}/download", headers=headers
+        )
+        assert download.status_code == 200
+        assert download.content == docx_bytes
+
+        decision = client.post(
+            f"/api/v1/brands/current/drafts/{draft_id}/records/source/{source_id}/decision",
+            headers=headers,
+            json={"status": "approved", "reason": "Scanned clean and checked extracted product specification."},
+        )
+        assert decision.status_code == 200, decision.text
+        validation = client.post(f"/api/v1/brands/current/drafts/{draft_id}/validate", headers=headers)
+        assert validation.status_code == 200, validation.text
+        assert validation.json()["valid"] is True, validation.json()
+    finally:
+        api_routes.scan_upload_bytes = old_scanner
+
+
+def test_infected_uploaded_knowledge_source_is_never_extracted_or_downloadable(client):
+    from io import BytesIO
+    from docx import Document
+    from sigillum.api import routes as api_routes
+
+    tenant_id = f"tenant_source_infected_{uuid4().hex[:10]}"
+    owner_email = f"source.infected.{uuid4().hex[:8]}@orbita.demo"
+    _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+    draft = client.post("/api/v1/brands/current/drafts", headers=headers).json()
+
+    document = Document()
+    document.add_paragraph("This document must remain quarantined.")
+    payload = BytesIO()
+    document.save(payload)
+
+    old_scanner = api_routes.scan_upload_bytes
+    try:
+        api_routes.scan_upload_bytes = lambda _data: {
+            "status": "INFECTED", "engine": "test-clamav", "scanned_at": "2026-11-09T00:00:00+00:00", "signature": "Test.Malware",
+        }
+        response = client.post(
+            f"/api/v1/brands/current/drafts/{draft['draft_id']}/sources/upload",
+            headers=headers,
+            data={"name": "Infected source", "source_type": "policy_document", "version": "1"},
+            files={"file": ("infected-fixture.docx", payload.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+        assert response.status_code == 200, response.text
+        source = response.json()["source"]
+        assert source["scan_status"] == "INFECTED"
+        assert source["extraction_status"] == "NOT_RUN"
+        assert source["reference_text"] is None
+        download = client.get(
+            f"/api/v1/brands/current/drafts/{draft['draft_id']}/sources/{source['source_id']}/download", headers=headers
+        )
+        assert download.status_code == 423
+        decision = client.post(
+            f"/api/v1/brands/current/drafts/{draft['draft_id']}/records/source/{source['source_id']}/decision",
+            headers=headers,
+            json={"status": "approved", "reason": "This should be rejected because malware was detected."},
+        )
+        assert decision.status_code == 422
+    finally:
+        api_routes.scan_upload_bytes = old_scanner
+
+
+def test_owner_asset_usage_policy_is_saved_validated_and_published(client):
+    tenant_id = f"tenant_asset_usage_{uuid4().hex[:10]}"
+    owner_email = f"asset.policy.{uuid4().hex[:10]}@orbita.demo"
+    _create_user(owner_email, "brand_owner", tenant_id)
+    headers = {"Authorization": f"Bearer {_token(client, owner_email)}"}
+    created = client.post("/api/v1/brands/current/drafts", headers=headers)
+    assert created.status_code == 200, created.text
+    draft = created.json()
+    manifest = dict(draft["snapshot"]["assets"])
+    manifest["usage_policies"] = {
+        "logo": {
+            "allowed_channels": ["direct_web", "social"],
+            "allowed_uses": ["brand_lockup", "campaign", "social_ad"],
+            "min_width": 0,
+            "min_height": 0,
+            "palette_hex": [],
+            "palette_tolerance": 80,
+            "minimum_palette_match_ratio": 0.7,
+            "clear_space_ratio": 0.1,
+            "valid_from": "2026-11-09T00:00:00+05:30",
+            "valid_until": None,
+            "severity": "review_required",
+        }
+    }
+    saved = client.put(
+        f"/api/v1/brands/current/drafts/{draft['draft_id']}/section",
+        headers=headers,
+        json={"section": "assets", "content": manifest},
+    )
+    assert saved.status_code == 200, saved.text
+    validation = client.post(
+        f"/api/v1/brands/current/drafts/{draft['draft_id']}/validate",
+        headers=headers,
+    )
+    assert validation.status_code == 200, validation.text
+    assert validation.json()["valid"] is True
+    assert any(item["code"] == "ASSET_CLEAR_SPACE_MANUAL_REVIEW" for item in validation.json()["warnings"])
+    published = client.post(
+        f"/api/v1/brands/current/drafts/{draft['draft_id']}/publish",
+        headers=headers,
+    )
+    assert published.status_code == 200, published.text
+    latest = client.get("/api/v1/brands/current/management", headers=headers)
+    assert latest.status_code == 200
+    assert latest.json()["snapshot"]["assets"]["usage_policies"]["logo"]["allowed_uses"] == [
+        "brand_lockup", "campaign", "social_ad"
+    ]
